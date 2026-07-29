@@ -1,0 +1,3099 @@
+/*
+ * Palmier Pro's editor look, ported to CSS from AppTheme.swift (GPL-3.0).
+ * Every value here comes from that file — see src/palmier-ui/theme.ts. NOTICE.md.
+ */
+
+.pmr {
+	/* Backgrounds */
+	--pmr-bg-base: rgb(10, 10, 10);
+	--pmr-bg-surface: rgb(22, 22, 22);
+	--pmr-bg-raised: rgb(30, 30, 30);
+	--pmr-bg-prominent: rgb(44, 44, 44);
+
+	/* Borders */
+	--pmr-border: rgba(255, 255, 255, 0.16);
+	--pmr-border-subtle: rgba(255, 255, 255, 0.12);
+	--pmr-divider: rgba(255, 255, 255, 0.44);
+
+	/* Text */
+	--pmr-text: rgba(255, 255, 255, 1);
+	--pmr-text-2: rgba(255, 255, 255, 0.8);
+	--pmr-text-3: rgba(255, 255, 255, 0.62);
+	--pmr-text-muted: rgba(255, 255, 255, 0.34);
+
+	/* Accent — warm off-white */
+	--pmr-accent: rgb(245, 239, 228);
+	--pmr-timecode: rgb(242, 153, 51);
+	/* Notes: distinct from the zoom lane's amber and from clip blue. */
+	--pmr-note: rgb(126, 178, 255);
+	--pmr-rec: rgb(229, 79, 79);
+	--pmr-ok: rgb(79, 184, 95);
+	--pmr-err: rgb(229, 79, 79);
+
+	/* Track colors */
+	--pmr-track-video: rgb(29, 88, 120);
+	--pmr-track-audio: rgb(46, 119, 101);
+	--pmr-track-text: rgb(113, 84, 134);
+
+	/* Set from Layout.trackHeaderWidth so CSS and JS share one number. */
+	--pmr-track-header: 132px;
+
+	--pmr-gap: 5px;
+	--pmr-radius-sm: 6px;
+	--pmr-radius-xs: 3px;
+
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	background: var(--pmr-bg-base);
+	color: var(--pmr-text);
+	font-family:
+		-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+	font-size: 13px;
+	-webkit-font-smoothing: antialiased;
+	overflow: hidden;
+	user-select: none;
+}
+
+.pmr *,
+.pmr *::before,
+.pmr *::after {
+	box-sizing: border-box;
+}
+
+/* ── Panel shell ───────────────────────────────────────────────────────
+   makeHosting(): surface fill, clipped to a small radius, inset by half the
+   panel gap over the base background, with a focus ring overlay. */
+.pmr-panel {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	height: 100%;
+	padding: calc(var(--pmr-gap) / 2);
+	background: var(--pmr-bg-base);
+}
+
+.pmr-panel__inner {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	background: var(--pmr-bg-surface);
+	border-radius: var(--pmr-radius-sm);
+	overflow: hidden;
+}
+
+/* PanelFocusRing — accent stroke at 0.6 opacity when focused. */
+.pmr-panel__ring {
+	position: absolute;
+	inset: calc(var(--pmr-gap) / 2);
+	border-radius: var(--pmr-radius-sm);
+	border: 1.5px solid var(--pmr-accent);
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.2s ease-out;
+}
+
+.pmr-panel--focused .pmr-panel__ring {
+	opacity: 0.6;
+}
+
+/* ── Splits ────────────────────────────────────────────────────────────
+   PaddedDividerSplitViewController gives dividers a fatter hit area than
+   they draw, so thin lines stay easy to grab. */
+.pmr-split {
+	display: flex;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+}
+
+.pmr-split--h {
+	flex-direction: row;
+}
+
+.pmr-split--v {
+	flex-direction: column;
+}
+
+.pmr-divider {
+	position: relative;
+	flex: 0 0 auto;
+	background: transparent;
+	z-index: 2;
+}
+
+.pmr-divider--v {
+	width: 1px;
+	cursor: col-resize;
+	margin: 0 calc(var(--pmr-gap) / 2);
+}
+
+.pmr-divider--h {
+	height: 1px;
+	cursor: row-resize;
+	margin: calc(var(--pmr-gap) / 2) 0;
+}
+
+.pmr-divider::after {
+	content: "";
+	position: absolute;
+	background: transparent;
+	transition: background 0.15s ease-out;
+}
+
+.pmr-divider--v::after {
+	inset: 0 -3px;
+}
+
+.pmr-divider--h::after {
+	inset: -3px 0;
+}
+
+.pmr-divider:hover::after,
+.pmr-divider[data-dragging="true"]::after {
+	background: rgba(255, 255, 255, 0.16);
+}
+
+/* ── Panel header bar — panelHeaderBar() ───────────────────────────── */
+.pmr-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	flex: 0 0 28px;
+	padding: 0 10px;
+	background: var(--pmr-bg-raised);
+	border-bottom: 1px solid var(--pmr-border);
+	font-size: 11px;
+	color: var(--pmr-text-3);
+}
+
+.pmr-header__title {
+	font-size: 11px;
+	font-weight: 500;
+	color: var(--pmr-text-2);
+	letter-spacing: 0.2px;
+}
+
+.pmr-header__spacer {
+	flex: 1;
+}
+
+/* ── Buttons — hoverHighlight() ────────────────────────────────────── */
+.pmr-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: none;
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	color: var(--pmr-text-2);
+	cursor: default;
+	transition:
+		background 0.15s ease-out,
+		color 0.15s ease-out;
+}
+
+.pmr-btn:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.pmr-btn[data-active="true"] {
+	background: rgba(255, 255, 255, 0.15);
+	color: var(--pmr-text);
+}
+
+.pmr-btn:disabled {
+	color: var(--pmr-text-muted);
+}
+
+.pmr-btn--glyph {
+	font-size: 16px;
+	font-weight: 600;
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.pmr-btn--serif {
+	font-size: 17px;
+	font-weight: 700;
+	font-family: ui-serif, Georgia, serif;
+}
+
+.pmr-toolbar-divider {
+	width: 1px;
+	height: 20px;
+	background: var(--pmr-border);
+	flex: 0 0 1px;
+}
+
+/* ── Toolbar — ToolbarView, 38px tall ─────────────────────────────── */
+.pmr-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 38px;
+	flex: 0 0 38px;
+	padding: 0 10px;
+	border-bottom: 1px solid var(--pmr-border);
+}
+
+.pmr-toolbar__group {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.pmr-zoom-slider {
+	width: 100px;
+	flex: 0 0 100px;
+}
+
+/* ── Tab rail — MediaPanelView.panelTabRail ───────────────────────── */
+.pmr-rail {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	flex: 0 0 auto;
+	width: 38px;
+	padding: 6px;
+	border-right: 1px solid var(--pmr-border);
+}
+
+.pmr-rail__btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border: none;
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	color: var(--pmr-text-3);
+	cursor: default;
+	transition:
+		background 0.15s ease-out,
+		color 0.15s ease-out;
+}
+
+.pmr-rail__btn:hover {
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.pmr-rail__btn[data-active="true"] {
+	background: rgba(255, 255, 255, 0.15);
+	color: var(--pmr-text);
+}
+
+/* ── Tab bars — TitleTabBar / InspectorView tabs ──────────────────── */
+.pmr-tabs {
+	display: flex;
+	align-items: stretch;
+	gap: 0;
+	height: 34px;
+	flex: 0 0 34px;
+	padding: 0 6px;
+	background: var(--pmr-bg-raised);
+	border-bottom: 1px solid var(--pmr-border);
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.pmr-tabs::-webkit-scrollbar {
+	display: none;
+}
+
+.pmr-tab {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 10px;
+	border: none;
+	background: transparent;
+	color: var(--pmr-text-muted);
+	font-size: 11px;
+	font-weight: 500;
+	white-space: nowrap;
+	cursor: default;
+	transition: color 0.15s ease-out;
+}
+
+.pmr-tab:hover {
+	color: var(--pmr-text-2);
+}
+
+.pmr-tab[data-active="true"] {
+	color: var(--pmr-text);
+}
+
+.pmr-tab[data-active="true"]::after {
+	content: "";
+	position: absolute;
+	left: 8px;
+	right: 8px;
+	bottom: 0;
+	height: 1.5px;
+	background: var(--pmr-accent);
+}
+
+/* Timeline tab bar — tabs are pills, not underlines. */
+.pmr-timeline-tabs {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	height: 28px;
+	flex: 0 0 28px;
+	padding: 0 6px;
+	background: var(--pmr-bg-raised);
+	border-bottom: 1px solid var(--pmr-border);
+}
+
+.pmr-timeline-tab {
+	display: inline-flex;
+	align-items: center;
+	height: 20px;
+	padding: 0 10px;
+	border: none;
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	color: var(--pmr-text-3);
+	font-size: 11px;
+	cursor: default;
+}
+
+.pmr-timeline-tab[data-active="true"] {
+	background: rgba(255, 255, 255, 0.1);
+	color: var(--pmr-text);
+}
+
+/* ── Inspector rows — InspectorRow.swift ──────────────────────────── */
+.pmr-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+
+.pmr-scroll::-webkit-scrollbar {
+	width: 8px;
+}
+
+.pmr-scroll::-webkit-scrollbar-thumb {
+	background: rgba(255, 255, 255, 0.15);
+	border-radius: 4px;
+}
+
+.pmr-scroll::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.pmr-group {
+	border-bottom: 1px solid var(--pmr-border-subtle);
+}
+
+.pmr-group__header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 10px;
+	color: var(--pmr-text-3);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.3px;
+	text-transform: uppercase;
+	cursor: default;
+}
+
+.pmr-group__body {
+	padding: 2px 10px 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.pmr-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 22px;
+}
+
+.pmr-row__label {
+	flex: 0 0 88px;
+	font-size: 11px;
+	color: var(--pmr-text-3);
+}
+
+.pmr-row__control {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+/* Keyframe diamond. Three states: no track, a track but not this frame, keyed.
+   Sized to the row's 22px so it never changes the row height. */
+.pmr-key {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	padding: 0;
+	border: none;
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	color: var(--pmr-text-muted);
+	cursor: default;
+	transition:
+		color 0.15s ease,
+		background 0.15s ease;
+}
+
+.pmr-key svg {
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.2;
+}
+
+.pmr-key:hover:not(:disabled) {
+	background: var(--pmr-bg-prominent);
+	color: var(--pmr-text);
+}
+
+.pmr-key[data-state="track"],
+.pmr-key[data-state="on"] {
+	color: var(--pmr-timecode);
+}
+
+.pmr-key[data-state="on"] svg {
+	fill: currentColor;
+}
+
+.pmr-key:disabled {
+	opacity: 0.3;
+}
+
+/* One effect and its parameters, separated so a stack reads as a stack. */
+.pmr-effect + .pmr-effect {
+	margin-top: 6px;
+	padding-top: 6px;
+	border-top: 1px solid var(--pmr-border-subtle);
+}
+
+/* ScrubbableNumberField — drag horizontally to change value. */
+.pmr-num {
+	width: 56px;
+	height: 22px;
+	padding: 0 6px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(0, 0, 0, 0.35);
+	color: var(--pmr-text);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	cursor: ew-resize;
+}
+
+/* A single line of text in a dialog — the rename field. Sized to fill the row
+   rather than the fixed 56px a numeric field wants. */
+/* Notes pinned to the timeline. Their own colour, so a note is never mistaken
+   for a clip or a zoom at a glance. */
+.pmr-note {
+	position: absolute;
+	top: 4px;
+	height: 18px;
+	max-width: 240px;
+	padding: 0 6px;
+	display: inline-flex;
+	align-items: center;
+	border-radius: var(--pmr-radius-xs);
+	border: 1px solid color-mix(in srgb, var(--pmr-note) 55%, transparent);
+	background: color-mix(in srgb, var(--pmr-note) 22%, transparent);
+	color: var(--pmr-text);
+	font-size: 10px;
+	line-height: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.pmr-note:hover {
+	background: color-mix(in srgb, var(--pmr-note) 34%, transparent);
+}
+
+/* Resolved notes stay visible but recede — the review trail survives. */
+.pmr-note[data-resolved] {
+	opacity: 0.45;
+	text-decoration: line-through;
+}
+
+/* Voiced: a small filled dot before the text. */
+.pmr-note[data-voiced]::before {
+	content: "";
+	flex: 0 0 5px;
+	width: 5px;
+	height: 5px;
+	margin-right: 5px;
+	border-radius: 50%;
+	background: var(--pmr-note);
+}
+
+/* Voiced, but the text has changed since — the audio no longer matches. */
+.pmr-note[data-stale] {
+	border-style: dashed;
+	border-color: var(--pmr-danger, #e5484d);
+}
+
+.pmr-notetrack {
+	position: relative;
+}
+
+/* The review-speed bar. Narrow, so it reads as a secondary control beside the
+   playhead rather than competing with it. */
+.pmr-rate {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+	width: 132px;
+}
+
+.pmr-rate .pmr-range {
+	flex: 1;
+}
+
+.pmr-rate__value {
+	min-width: 42px;
+	padding: 0 4px;
+	border: none;
+	background: transparent;
+	color: var(--pmr-text-muted);
+	font-size: 10px;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	cursor: pointer;
+}
+
+.pmr-rate__value:hover {
+	color: var(--pmr-text);
+}
+
+.pmr-textinput {
+	width: 100%;
+	min-width: 180px;
+	height: 24px;
+	padding: 0 8px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(0, 0, 0, 0.35);
+	color: var(--pmr-text);
+	font: inherit;
+	font-size: 12px;
+	user-select: text;
+}
+
+.pmr-textinput:focus {
+	outline: none;
+	border-color: var(--pmr-accent);
+}
+
+.pmr-num:focus {
+	outline: none;
+	border-color: var(--pmr-accent);
+}
+
+/* ── Range ────────────────────────────────────────────────────────────
+   AppTheme.Slider: a 4px track and a 10px thumb. Drawn rather than left to
+   `accent-color`, which renders a platform control that ignores every other
+   decision in this app. The filled portion runs from an origin so a bipolar
+   control shows the sign of its adjustment, not just its magnitude. */
+.pmr-range {
+	--pmr-range-pos: 0%;
+	--pmr-range-fill-start: 0%;
+	--pmr-range-fill-end: 0%;
+	--pmr-range-track: none;
+
+	flex: 1;
+	min-width: 40px;
+	height: 16px;
+	margin: 0;
+	padding: 0;
+	background: transparent;
+	appearance: none;
+	-webkit-appearance: none;
+	cursor: default;
+}
+
+.pmr-range::-webkit-slider-runnable-track {
+	height: 4px;
+	border-radius: 2px;
+	background:
+		linear-gradient(
+			to right,
+			transparent var(--pmr-range-fill-start),
+			var(--pmr-accent) var(--pmr-range-fill-start),
+			var(--pmr-accent) var(--pmr-range-fill-end),
+			transparent var(--pmr-range-fill-end)
+		)
+		no-repeat,
+		rgba(255, 255, 255, 0.12);
+}
+
+/* A tinted track carries its own meaning; a fill on top would fight it. */
+.pmr-range[data-tinted="true"]::-webkit-slider-runnable-track {
+	background: var(--pmr-range-track), rgba(255, 255, 255, 0.12);
+}
+
+.pmr-range::-webkit-slider-thumb {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 10px;
+	height: 10px;
+	margin-top: -3px;
+	border: none;
+	border-radius: 50%;
+	background: var(--pmr-accent);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+	transition:
+		transform 0.15s ease-out,
+		box-shadow 0.15s ease-out;
+}
+
+.pmr-range:hover::-webkit-slider-thumb {
+	transform: scale(1.2);
+}
+
+.pmr-range:active::-webkit-slider-thumb {
+	transform: scale(1.35);
+}
+
+.pmr-range:focus-visible {
+	outline: none;
+}
+
+.pmr-range:focus-visible::-webkit-slider-thumb {
+	box-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.55),
+		0 0 0 3px rgba(245, 239, 228, 0.3);
+}
+
+.pmr-range:disabled {
+	opacity: 0.4;
+}
+
+.pmr-range:disabled::-webkit-slider-thumb {
+	transform: none;
+}
+
+/* Firefox draws track and thumb through its own pseudo-elements. */
+.pmr-range::-moz-range-track {
+	height: 4px;
+	border-radius: 2px;
+	background: rgba(255, 255, 255, 0.12);
+}
+
+.pmr-range::-moz-range-progress {
+	height: 4px;
+	border-radius: 2px;
+	background: var(--pmr-accent);
+}
+
+.pmr-range::-moz-range-thumb {
+	width: 10px;
+	height: 10px;
+	border: none;
+	border-radius: 50%;
+	background: var(--pmr-accent);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+/* ── Preview canvas ───────────────────────────────────────────────── */
+
+/* ── Timeline ─────────────────────────────────────────────────────── */
+
+/* AudioMeterView — 32px rail beside the timeline. */
+
+/* ── Media panel ──────────────────────────────────────────────────── */
+
+/* Library folders. They exist only as the paths assets carry, so a folder tile
+   is a view of that path rather than a stored object. */
+.pmr-crumbs {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 6px 8px 0;
+	font-size: 11px;
+}
+
+.pmr-crumb__wrap {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.pmr-crumb {
+	border: none;
+	background: transparent;
+	padding: 2px 4px;
+	border-radius: var(--pmr-radius-xs);
+	color: var(--pmr-text-3);
+	font: inherit;
+	cursor: default;
+}
+
+.pmr-crumb:hover {
+	background: var(--pmr-bg-prominent);
+	color: var(--pmr-text);
+}
+
+.pmr-crumb[data-active="true"] {
+	color: var(--pmr-text);
+}
+
+.pmr-crumb__sep {
+	color: var(--pmr-text-muted);
+}
+
+.pmr-folder {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	aspect-ratio: 16 / 9;
+	padding: 6px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-sm);
+	background: var(--pmr-bg-raised);
+	color: var(--pmr-text-2);
+	font: inherit;
+	cursor: default;
+	transition: background 0.15s ease;
+}
+
+.pmr-folder:hover {
+	background: var(--pmr-bg-prominent);
+}
+
+.pmr-folder__name {
+	max-width: 100%;
+	font-size: 10px;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* ── Agent panel — AgentPanelView ─────────────────────────────────── */
+
+/* Tool call receipt — the agent's edits are visible, not hidden. */
+
+/* ── Titlebar ─────────────────────────────────────────────────────── */
+
+.pmr-swatch {
+	width: 22px;
+	height: 22px;
+	flex: 0 0 22px;
+	padding: 0;
+	border: 1px solid var(--pmr-border);
+	border-radius: var(--pmr-radius-xs);
+	cursor: pointer;
+}
+
+.pmr-swatch:hover {
+	border-color: var(--pmr-text-muted);
+}
+
+/* The chosen backdrop, ringed so it reads at a glance in a row of ten. */
+.pmr-swatch[data-active] {
+	border-color: var(--pmr-accent);
+	box-shadow: 0 0 0 1px var(--pmr-accent);
+}
+
+/* ── Preview canvas ───────────────────────────────────────────────── */
+.pmr-preview {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 0;
+	background: var(--pmr-bg-base);
+	padding: 14px;
+}
+
+.pmr-preview__canvas {
+	position: relative;
+	background: #000;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+	max-width: 100%;
+	max-height: 100%;
+	aspect-ratio: 16 / 9;
+	width: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+}
+
+.pmr-transport {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 34px;
+	flex: 0 0 34px;
+	padding: 0 10px;
+	border-top: 1px solid var(--pmr-border);
+}
+
+.pmr-timecode {
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	color: var(--pmr-timecode);
+}
+
+/* ── Timeline ─────────────────────────────────────────────────────── */
+.pmr-timeline {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+}
+
+.pmr-timeline__body {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.pmr-ruler {
+	position: relative;
+	height: 24px;
+	flex: 0 0 24px;
+	border-bottom: 1px solid var(--pmr-border);
+	background: var(--pmr-bg-raised);
+	overflow: hidden;
+}
+
+.pmr-ruler__tick {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	border-left: 1px solid rgba(255, 255, 255, 0.12);
+	padding-left: 4px;
+	font-size: 9px;
+	font-variant-numeric: tabular-nums;
+	color: var(--pmr-text-muted);
+	line-height: 24px;
+}
+
+.pmr-tracks {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	position: relative;
+}
+
+.pmr-track {
+	display: flex;
+	align-items: stretch;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pmr-track__header {
+	flex: 0 0 var(--pmr-track-header);
+	width: var(--pmr-track-header);
+	min-width: 0;
+	overflow: hidden;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 8px;
+	background: var(--pmr-bg-raised);
+	border-right: 1px solid var(--pmr-border);
+	font-size: 11px;
+	color: var(--pmr-text-3);
+	position: sticky;
+	left: 0;
+	z-index: 3;
+}
+
+.pmr-track__lane {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+}
+
+.pmr-clip {
+	position: absolute;
+	top: 4px;
+	bottom: 4px;
+	border: 1px solid #000;
+	border-radius: var(--pmr-radius-xs);
+	padding: 3px 6px;
+	font-size: 10px;
+	color: rgba(255, 255, 255, 0.92);
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	cursor: default;
+}
+
+.pmr-clip[data-selected="true"] {
+	border-color: var(--pmr-accent);
+	box-shadow: inset 0 0 0 1px var(--pmr-accent);
+}
+
+.pmr-clip__zoom {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 3px;
+	background: var(--pmr-timecode);
+}
+
+.pmr-playhead {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 1px;
+	background: var(--pmr-timecode);
+	z-index: 4;
+	pointer-events: none;
+}
+
+.pmr-playhead::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: -4px;
+	border-left: 4.5px solid transparent;
+	border-right: 4.5px solid transparent;
+	border-top: 7px solid var(--pmr-timecode);
+}
+
+/* AudioMeterView — 32px rail beside the timeline. */
+.pmr-meter {
+	flex: 0 0 32px;
+	display: flex;
+	justify-content: center;
+	gap: 2px;
+	padding: 8px 0;
+	border-left: 1px solid var(--pmr-border);
+	background: var(--pmr-bg-surface);
+}
+
+.pmr-meter__bar {
+	width: 8px;
+	border-radius: 1px;
+	background: rgba(255, 255, 255, 0.08);
+	position: relative;
+	overflow: hidden;
+}
+
+.pmr-meter__fill {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: linear-gradient(
+		to top,
+		rgb(20, 199, 56) 0%,
+		rgb(20, 199, 56) 70%,
+		rgb(250, 214, 26) 88%,
+		rgb(230, 61, 51) 100%
+	);
+}
+
+/* ── Media panel ──────────────────────────────────────────────────── */
+.pmr-media-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+	gap: 8px;
+	padding: 8px;
+}
+
+.pmr-asset {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	cursor: default;
+}
+
+.pmr-asset__thumb {
+	aspect-ratio: 16 / 10;
+	border-radius: var(--pmr-radius-xs);
+	background: var(--pmr-bg-raised);
+	border: 1px solid var(--pmr-border-subtle);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--pmr-text-muted);
+	overflow: hidden;
+	transition: border-color 0.15s ease-out;
+}
+
+.pmr-asset:hover .pmr-asset__thumb {
+	border-color: var(--pmr-border);
+}
+
+.pmr-asset[data-selected="true"] .pmr-asset__thumb {
+	border-color: var(--pmr-accent);
+}
+
+.pmr-asset__name {
+	font-size: 10px;
+	color: var(--pmr-text-3);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pmr-asset__meta {
+	font-size: 9px;
+	color: var(--pmr-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Agent panel — AgentPanelView ─────────────────────────────────── */
+.pmr-agent {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+.pmr-agent__log {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.pmr-msg {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.pmr-msg__role {
+	font-size: 9px;
+	font-weight: 600;
+	letter-spacing: 0.6px;
+	text-transform: uppercase;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-msg--user .pmr-msg__body {
+	color: var(--pmr-text);
+	background: var(--pmr-bg-raised);
+	border-radius: var(--pmr-radius-sm);
+	padding: 8px 10px;
+}
+
+.pmr-msg--assistant .pmr-msg__body {
+	color: var(--pmr-text-2);
+}
+
+/* Tool call receipt — the agent's edits are visible, not hidden. */
+.pmr-tool {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 8px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(0, 0, 0, 0.3);
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 10px;
+	color: var(--pmr-text-3);
+}
+
+.pmr-tool__dot {
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	flex: 0 0 5px;
+}
+
+.pmr-agent__input {
+	flex: 0 0 auto;
+	margin: 10px;
+	border: 1px solid var(--pmr-border);
+	border-radius: var(--pmr-radius-sm);
+	background: var(--pmr-bg-raised);
+	display: flex;
+	flex-direction: column;
+}
+
+.pmr-agent__field {
+	border: none;
+	background: transparent;
+	resize: none;
+	padding: 8px 10px;
+	color: var(--pmr-text);
+	font: inherit;
+	font-size: 12px;
+	min-height: 40px;
+	outline: none;
+	user-select: text;
+}
+
+.pmr-agent__field::placeholder {
+	color: var(--pmr-text-muted);
+}
+
+.pmr-agent__actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 6px 6px;
+}
+
+.pmr-send {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border: none;
+	border-radius: var(--pmr-radius-xs);
+	background: var(--pmr-accent);
+	color: #0a0a0a;
+	cursor: default;
+}
+
+.pmr-send:disabled {
+	background: rgba(255, 255, 255, 0.15);
+	color: var(--pmr-text-muted);
+}
+
+/* ── Titlebar ─────────────────────────────────────────────────────── */
+.pmr-titlebar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 38px;
+	flex: 0 0 38px;
+	padding: 0 12px;
+	background: var(--pmr-bg-base);
+	border-bottom: 1px solid var(--pmr-border);
+	/* The bar is the window's drag handle; every control in it opts back out. */
+	-webkit-app-region: drag;
+}
+
+/* macOS draws its traffic lights over the top-left of a hiddenInset window, so
+   the bar starts after them rather than underneath. */
+.pmr-titlebar[data-platform="mac"] {
+	padding-left: 78px;
+}
+
+.pmr-titlebar button,
+.pmr-titlebar input,
+.pmr-titlebar .pmr-menubar,
+.pmr-titlebar .pmr-menubar__slot {
+	-webkit-app-region: no-drag;
+}
+
+.pmr-titlebar__name {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--pmr-text-2);
+}
+
+.pmr-titlebar__meta {
+	font-size: 11px;
+	color: var(--pmr-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.pmr-seg {
+	display: inline-flex;
+	padding: 2px;
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(255, 255, 255, 0.06);
+	gap: 2px;
+}
+
+.pmr-seg__btn {
+	border: none;
+	background: transparent;
+	color: var(--pmr-text-3);
+	font-size: 11px;
+	padding: 3px 9px;
+	border-radius: 2px;
+	cursor: default;
+}
+
+.pmr-seg__btn[data-active="true"] {
+	background: rgba(255, 255, 255, 0.14);
+	color: var(--pmr-text);
+}
+
+.pmr-empty {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	color: var(--pmr-text-muted);
+	font-size: 11px;
+	text-align: center;
+	padding: 20px;
+}
+
+/* ── Numeric field ────────────────────────────────────────────────────
+   Scrubbable: the ew-resize cursor is the affordance, and the field lights
+   up while a drag is in flight so the value is clearly being driven. */
+.pmr-numwrap {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.pmr-numwrap[data-scrubbing] .pmr-num {
+	border-color: var(--pmr-accent);
+	background: rgba(245, 239, 228, 0.08);
+}
+
+.pmr-num__suffix {
+	font-size: 10px;
+	color: var(--pmr-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.pmr-num:focus-visible {
+	outline: none;
+	border-color: var(--pmr-accent);
+	box-shadow: 0 0 0 2px rgba(245, 239, 228, 0.18);
+}
+
+/* ── Switch ───────────────────────────────────────────────────────── */
+.pmr-switch {
+	position: relative;
+	flex: 0 0 auto;
+	width: 26px;
+	height: 15px;
+	padding: 0;
+	border: none;
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.14);
+	cursor: default;
+	transition: background 0.15s ease-out;
+}
+
+.pmr-switch[aria-checked="true"] {
+	background: var(--pmr-accent);
+}
+
+.pmr-switch__knob {
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 11px;
+	height: 11px;
+	border-radius: 50%;
+	background: var(--pmr-bg-base);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+	transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.pmr-switch[aria-checked="true"] .pmr-switch__knob {
+	transform: translateX(11px);
+}
+
+.pmr-switch:disabled {
+	opacity: 0.4;
+}
+
+.pmr-switch:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 2px rgba(245, 239, 228, 0.3);
+}
+
+/* ── Select ───────────────────────────────────────────────────────── */
+.pmr-selectwrap {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	flex: 1;
+	min-width: 0;
+}
+
+.pmr-select {
+	flex: 1;
+	min-width: 0;
+	height: 22px;
+	padding: 0 18px 0 6px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(0, 0, 0, 0.35);
+	color: var(--pmr-text);
+	font: inherit;
+	font-size: 11px;
+	appearance: none;
+	-webkit-appearance: none;
+	cursor: default;
+}
+
+.pmr-select:hover {
+	border-color: var(--pmr-border);
+}
+
+.pmr-select:focus-visible {
+	outline: none;
+	border-color: var(--pmr-accent);
+}
+
+.pmr-selectwrap__chevron {
+	position: absolute;
+	right: 6px;
+	color: var(--pmr-text-muted);
+	pointer-events: none;
+}
+
+/* ── Colour field ─────────────────────────────────────────────────── */
+.pmr-colorfield {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.pmr-colorfield input[type="color"] {
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 1px solid var(--pmr-border);
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	cursor: default;
+}
+
+.pmr-colorfield input[type="color"]::-webkit-color-swatch-wrapper {
+	padding: 2px;
+}
+
+.pmr-colorfield input[type="color"]::-webkit-color-swatch {
+	border: none;
+	border-radius: 2px;
+}
+
+.pmr-colorfield__hex {
+	font-size: 10px;
+	font-variant-numeric: tabular-nums;
+	color: var(--pmr-text-muted);
+	letter-spacing: 0.3px;
+}
+
+/* ── Menu bar ─────────────────────────────────────────────────────────
+   The app's own menu bar rather than the OS's, because the editor runs in a
+   frameless window and the menus have to travel with it. */
+.pmr-menubar {
+	position: relative;
+	/* Above the dismiss scrim, so clicking a sibling trigger switches menus
+	   instead of being swallowed by the overlay that closes the open one. */
+	z-index: 60;
+	display: flex;
+	align-items: center;
+	gap: 1px;
+}
+
+/* Each trigger sits above the dismiss scrim, which is a later sibling and
+   would otherwise paint over the whole bar. */
+.pmr-menubar__slot {
+	position: relative;
+	z-index: 61;
+}
+
+.pmr-menubar__trigger {
+	height: 22px;
+	padding: 0 9px;
+	border: none;
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	color: var(--pmr-text-2);
+	font: inherit;
+	font-size: 12px;
+	cursor: default;
+	transition: background 0.12s ease-out;
+}
+
+.pmr-menubar__trigger:hover,
+.pmr-menubar__trigger[data-open="true"] {
+	background: rgba(255, 255, 255, 0.1);
+	color: var(--pmr-text);
+}
+
+.pmr-menu {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	z-index: 62;
+	min-width: 210px;
+	margin-top: 3px;
+	padding: 4px;
+	border: 1px solid var(--pmr-border);
+	border-radius: var(--pmr-radius-sm);
+	background: var(--pmr-bg-prominent);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+	animation: pmr-menu-in 0.12s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@keyframes pmr-menu-in {
+	from {
+		opacity: 0;
+		transform: translateY(-3px);
+	}
+}
+
+.pmr-menu__item {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	height: 24px;
+	padding: 0 8px;
+	border: none;
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	color: var(--pmr-text-2);
+	font: inherit;
+	font-size: 12px;
+	text-align: left;
+	cursor: default;
+}
+
+.pmr-menu__item:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.12);
+	color: var(--pmr-text);
+}
+
+.pmr-menu__item:disabled {
+	color: var(--pmr-text-muted);
+}
+
+.pmr-menu__label {
+	flex: 1;
+}
+
+.pmr-menu__shortcut {
+	font-size: 11px;
+	color: var(--pmr-text-muted);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.4px;
+}
+
+.pmr-menu__sep {
+	height: 1px;
+	margin: 4px 6px;
+	background: var(--pmr-border-subtle);
+}
+
+.pmr-menu__scrim {
+	position: fixed;
+	inset: 0;
+	/* Below the bar, above everything else. */
+	z-index: 58;
+}
+
+/* ── Empty states ─────────────────────────────────────────────────────
+   A new project has no media, so the first thing every panel shows is the
+   way out of empty — not an illustration of one. */
+.pmr-blank {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 24px 20px;
+	text-align: center;
+}
+
+.pmr-blank__icon {
+	color: var(--pmr-text-muted);
+	opacity: 0.7;
+}
+
+.pmr-blank__title {
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--pmr-text-2);
+}
+
+.pmr-blank__body {
+	max-width: 240px;
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-blank__actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	justify-content: center;
+	margin-top: 2px;
+}
+
+.pmr-action {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 26px;
+	padding: 0 11px;
+	border: 1px solid var(--pmr-border);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(255, 255, 255, 0.05);
+	color: var(--pmr-text-2);
+	font: inherit;
+	font-size: 11px;
+	cursor: default;
+	transition:
+		background 0.15s ease-out,
+		border-color 0.15s ease-out,
+		color 0.15s ease-out;
+}
+
+.pmr-action:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.28);
+	color: var(--pmr-text);
+}
+
+.pmr-action:disabled {
+	opacity: 0.45;
+}
+
+.pmr-action--primary {
+	background: var(--pmr-accent);
+	border-color: var(--pmr-accent);
+	color: #0a0a0a;
+	font-weight: 500;
+}
+
+.pmr-action--primary:hover:not(:disabled) {
+	background: #fffaf0;
+	border-color: #fffaf0;
+	color: #0a0a0a;
+}
+
+.pmr-action--record {
+	color: var(--pmr-rec);
+}
+
+.pmr-action--record:hover:not(:disabled) {
+	border-color: var(--pmr-rec);
+	color: var(--pmr-rec);
+}
+
+/* ── Drop zone ────────────────────────────────────────────────────────
+   The whole media panel is the target; the ring appears only while a drag
+   is actually over it. */
+.pmr-drop {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+.pmr-drop__ring {
+	position: absolute;
+	inset: 6px;
+	z-index: 10;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	border: 1.5px dashed var(--pmr-accent);
+	border-radius: var(--pmr-radius-sm);
+	background: rgba(10, 10, 10, 0.82);
+	color: var(--pmr-accent);
+	font-size: 12px;
+	pointer-events: none;
+}
+
+/* ── Recording HUD ────────────────────────────────────────────────────
+   Recordly's floating control bar: it hovers over the work rather than
+   docking, so it can sit above whatever is being captured. */
+.pmr-hud {
+	position: absolute;
+	left: 50%;
+	bottom: 18px;
+	z-index: 50;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 42px;
+	padding: 0 8px 0 12px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	border-radius: 21px;
+	background: rgba(24, 24, 24, 0.92);
+	backdrop-filter: blur(20px) saturate(1.4);
+	box-shadow:
+		0 12px 32px rgba(0, 0, 0, 0.55),
+		inset 0 1px 0 rgba(255, 255, 255, 0.06);
+	animation: pmr-hud-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pmr-hud-in {
+	from {
+		opacity: 0;
+		transform: translate(-50%, 14px);
+	}
+}
+
+.pmr-hud__dot {
+	width: 9px;
+	height: 9px;
+	flex: 0 0 9px;
+	border-radius: 50%;
+	background: var(--pmr-rec);
+}
+
+.pmr-hud[data-state="recording"] .pmr-hud__dot {
+	animation: pmr-rec-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pmr-rec-pulse {
+	50% {
+		opacity: 0.35;
+	}
+}
+
+.pmr-hud__time {
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+	color: var(--pmr-text);
+	letter-spacing: 0.5px;
+}
+
+.pmr-hud__source {
+	max-width: 150px;
+	font-size: 11px;
+	color: var(--pmr-text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pmr-hud__sep {
+	width: 1px;
+	height: 18px;
+	background: rgba(255, 255, 255, 0.14);
+}
+
+.pmr-hud__btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--pmr-text-2);
+	cursor: default;
+	transition: background 0.15s ease-out;
+}
+
+.pmr-hud__btn:hover {
+	background: rgba(255, 255, 255, 0.12);
+	color: var(--pmr-text);
+}
+
+.pmr-hud__btn--stop {
+	background: var(--pmr-rec);
+	color: #fff;
+}
+
+.pmr-hud__btn--stop:hover {
+	background: #ff5b52;
+	color: #fff;
+}
+
+/* Countdown before capture begins. */
+.pmr-countdown {
+	position: absolute;
+	inset: 0;
+	z-index: 60;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(10, 10, 10, 0.7);
+	backdrop-filter: blur(3px);
+}
+
+.pmr-countdown__n {
+	font-size: 84px;
+	font-weight: 200;
+	font-variant-numeric: tabular-nums;
+	color: var(--pmr-text);
+	letter-spacing: -0.04em;
+	animation: pmr-count 1s ease-out;
+}
+
+@keyframes pmr-count {
+	from {
+		opacity: 0;
+		transform: scale(1.25);
+	}
+}
+
+/* ── Source picker ────────────────────────────────────────────────── */
+/* The record sheet is wider than the export sheet: it exists to show pictures.
+   Sized so three previews sit side by side without the grid reflowing. */
+.pmr-sheet--wide {
+	width: min(720px, 92vw);
+	max-width: 720px;
+}
+
+.pmr-record__options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--pmr-border-subtle);
+}
+
+.pmr-record__list {
+	max-height: min(460px, 60vh);
+	overflow-y: auto;
+	padding: 0 4px 10px;
+}
+
+/* Source picker — grouped by what you're capturing, previewed by a live frame.
+   Ported from Recordly's SourceSelector: a name alone can't tell two "Untitled"
+   windows apart, so the picture is the primary affordance and the name labels
+   it. */
+.pmr-sourcegroup {
+	padding: 10px 10px 4px;
+}
+
+.pmr-sourcegroup__label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0 0 8px;
+	font-size: 10px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-sourcegroup__count {
+	padding: 1px 5px;
+	border-radius: 999px;
+	background: var(--pmr-bg-prominent);
+	font-size: 9px;
+	letter-spacing: 0;
+	color: var(--pmr-text-3);
+}
+
+.pmr-sources {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+	gap: 8px;
+}
+
+.pmr-source {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 6px;
+	border: 1px solid transparent;
+	border-radius: var(--pmr-radius-sm);
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: default;
+	transition:
+		border-color 0.15s ease-out,
+		background 0.15s ease-out;
+}
+
+.pmr-source:hover:not(:disabled) {
+	border-color: var(--pmr-border);
+	background: rgba(255, 255, 255, 0.04);
+}
+
+.pmr-source:hover:not(:disabled) .pmr-source__preview {
+	border-color: var(--pmr-accent);
+}
+
+.pmr-source:disabled {
+	opacity: 0.5;
+}
+
+.pmr-source__preview {
+	position: relative;
+	aspect-ratio: 16 / 10;
+	overflow: hidden;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	/* A dark plate so a light window's edges still read as an edge. */
+	background: var(--pmr-bg-base);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--pmr-text-muted);
+	transition: border-color 0.15s ease-out;
+}
+
+.pmr-source__shot {
+	width: 100%;
+	height: 100%;
+	/* Contain, not cover: a window's whole shape is what identifies it. */
+	object-fit: contain;
+}
+
+.pmr-source__glyph {
+	display: flex;
+	opacity: 0.5;
+}
+
+.pmr-source__badge {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	padding: 1px 5px;
+	border-radius: 999px;
+	background: rgba(0, 0, 0, 0.65);
+	font-size: 8px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--pmr-text-2);
+}
+
+.pmr-source__meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.pmr-source__icon {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 16px;
+	border-radius: 3px;
+	object-fit: contain;
+}
+
+.pmr-source__text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.pmr-source__name {
+	font-size: 11px;
+	color: var(--pmr-text-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pmr-source__app {
+	font-size: 9px;
+	color: var(--pmr-text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Webcam position — a nine-cell grid, so the corner you want is the corner you
+   click rather than a name you have to decode. */
+.pmr-poscells {
+	display: grid;
+	grid-template-columns: repeat(3, 22px);
+	grid-template-rows: repeat(3, 18px);
+	gap: 3px;
+}
+
+.pmr-poscell {
+	padding: 0;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: 3px;
+	background: var(--pmr-bg-raised);
+	cursor: default;
+	transition:
+		border-color 0.15s ease,
+		background 0.15s ease;
+}
+
+.pmr-poscell:hover {
+	background: var(--pmr-bg-prominent);
+}
+
+.pmr-poscell[data-active="true"] {
+	border-color: var(--pmr-accent);
+	background: var(--pmr-accent);
+}
+
+/* The camera bubble over the preview. */
+.pmr-webcam {
+	position: absolute;
+	overflow: hidden;
+	z-index: 2;
+	border: 1px solid rgba(255, 255, 255, 0.16);
+	box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+	background: #000;
+}
+
+/* Cursor style picker — the shape is the label, as it is in Recordly. */
+.pmr-cursorstyles {
+	display: flex;
+	gap: 5px;
+	flex-wrap: wrap;
+}
+
+.pmr-cursorstyle {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	padding: 0;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: var(--pmr-bg-raised);
+	cursor: default;
+	transition:
+		border-color 0.15s ease,
+		background 0.15s ease;
+}
+
+.pmr-cursorstyle:hover {
+	background: var(--pmr-bg-prominent);
+}
+
+.pmr-cursorstyle[data-active="true"] {
+	border-color: var(--pmr-accent);
+	background: rgba(245, 239, 228, 0.08);
+}
+
+/* The drawn pointer. Positioned by its tip, which is where a pointer points. */
+.pmr-cursor {
+	position: absolute;
+	pointer-events: none;
+	z-index: 3;
+	transform: translate(-8%, -6%);
+	filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+/* The preview is its own fullscreen root, so the canvas and the transport go
+   fullscreen together — a bare canvas would leave no way to scrub. */
+.pmr-previewroot {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+.pmr-previewroot[data-fullscreen] {
+	background: var(--pmr-bg-base);
+}
+
+.pmr-previewroot[data-fullscreen] .pmr-preview {
+	/* Fullscreen is for looking at the picture, so it gets the whole frame. */
+	padding: 0;
+}
+
+/* The floating record bar. Its window is transparent and content-protected, so
+   this is the whole visible surface — and it never appears in a capture. */
+.pmr-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 40px;
+	margin: 6px;
+	padding: 0 8px 0 12px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	border-radius: 20px;
+	background: rgba(22, 22, 22, 0.94);
+	backdrop-filter: blur(12px);
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+	color: var(--pmr-text);
+	font-family:
+		-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+	/* Draggable everywhere except the controls, so it can be moved off a
+	   region of the screen the user needs to see. */
+	-webkit-app-region: drag;
+}
+
+.pmr-bar button {
+	-webkit-app-region: no-drag;
+}
+
+.pmr-bar__dot {
+	width: 8px;
+	height: 8px;
+	flex: 0 0 8px;
+	border-radius: 50%;
+	background: var(--pmr-rec);
+	animation: pmr-bar-pulse 1.6s ease-in-out infinite;
+}
+
+.pmr-bar__dot[data-paused] {
+	background: var(--pmr-text-muted);
+	animation: none;
+}
+
+@keyframes pmr-bar-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
+.pmr-bar__time {
+	font-size: 13px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	color: var(--pmr-text);
+}
+
+.pmr-bar__count {
+	font-size: 17px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	color: var(--pmr-timecode);
+}
+
+.pmr-bar__label {
+	max-width: 96px;
+	font-size: 11px;
+	color: var(--pmr-text-3);
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.pmr-bar__spacer {
+	flex: 1;
+}
+
+.pmr-bar__btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: none;
+	border-radius: 13px;
+	background: transparent;
+	color: var(--pmr-text-2);
+	cursor: default;
+	transition: background 0.15s ease;
+}
+
+.pmr-bar__btn:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.1);
+	color: var(--pmr-text);
+}
+
+.pmr-bar__btn:disabled {
+	opacity: 0.4;
+}
+
+.pmr-bar__stop {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 12px;
+	border: none;
+	border-radius: 14px;
+	background: var(--pmr-rec);
+	color: #fff;
+	font: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: default;
+}
+
+.pmr-bar__stop:hover:not(:disabled) {
+	filter: brightness(1.1);
+}
+
+.pmr-bar__stop:disabled {
+	opacity: 0.6;
+}
+
+.pmr-bar__square {
+	width: 9px;
+	height: 9px;
+	border-radius: 2px;
+	background: #fff;
+}
+
+/* Zoom track — punch-ins get their own lane, the way Recordly presents them.
+   A stripe buried inside the footage clip can't be clicked, dragged, or seen
+   when the clip is short. */
+.pmr-track--zoom {
+	border-bottom: 1px solid var(--pmr-border-subtle);
+}
+
+.pmr-zoomtrack {
+	position: relative;
+	border: none;
+	padding: 0;
+	background: repeating-linear-gradient(
+		90deg,
+		rgba(255, 255, 255, 0.02) 0,
+		rgba(255, 255, 255, 0.02) 1px,
+		transparent 1px,
+		transparent 24px
+	);
+	font: inherit;
+	color: inherit;
+	text-align: left;
+	cursor: copy;
+}
+
+.pmr-zoomtrack:hover {
+	background-color: rgba(242, 153, 51, 0.05);
+}
+
+.pmr-zoomtrack__hint {
+	position: absolute;
+	left: 10px;
+	top: 50%;
+	transform: translateY(-50%);
+	font-size: 10px;
+	color: var(--pmr-text-muted);
+	pointer-events: none;
+}
+
+.pmr-zoomblock {
+	position: absolute;
+	top: 4px;
+	bottom: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--pmr-radius-xs);
+	border: 1px solid rgba(242, 153, 51, 0.55);
+	background: linear-gradient(180deg, rgba(242, 153, 51, 0.35), rgba(242, 153, 51, 0.18));
+	cursor: grab;
+	overflow: hidden;
+}
+
+.pmr-zoomblock[data-active="true"] {
+	border-color: var(--pmr-timecode);
+	box-shadow: 0 0 0 1px var(--pmr-timecode);
+}
+
+.pmr-zoomblock__label {
+	font-size: 9px;
+	font-variant-numeric: tabular-nums;
+	color: rgba(255, 255, 255, 0.92);
+	pointer-events: none;
+	white-space: nowrap;
+}
+
+/* Wide enough to grab, narrow enough not to eat the block. */
+.pmr-zoomblock__edge {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 6px;
+	cursor: ew-resize;
+}
+
+.pmr-zoomblock__edge--l {
+	left: 0;
+}
+
+.pmr-zoomblock__edge--r {
+	right: 0;
+}
+
+/* ── Toast ────────────────────────────────────────────────────────── */
+.pmr-toasts {
+	position: absolute;
+	right: 12px;
+	bottom: 12px;
+	z-index: 70;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	align-items: flex-end;
+}
+
+.pmr-toast {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 340px;
+	padding: 8px 12px;
+	border: 1px solid var(--pmr-border);
+	border-radius: var(--pmr-radius-sm);
+	background: var(--pmr-bg-prominent);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+	font-size: 11px;
+	color: var(--pmr-text-2);
+	animation: pmr-toast-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pmr-toast-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+}
+
+.pmr-toast[data-tone="error"] {
+	border-color: rgba(229, 79, 79, 0.5);
+}
+
+.pmr-toast__dot {
+	width: 5px;
+	height: 5px;
+	flex: 0 0 5px;
+	border-radius: 50%;
+	background: var(--pmr-ok);
+}
+
+.pmr-toast[data-tone="error"] .pmr-toast__dot {
+	background: var(--pmr-err);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pmr-menu,
+	.pmr-hud,
+	.pmr-toast,
+	.pmr-countdown__n {
+		animation: none;
+	}
+
+	.pmr-switch__knob,
+	.pmr-range::-webkit-slider-thumb {
+		transition: none;
+	}
+}
+
+/* ── Asset tile ───────────────────────────────────────────────────────
+   The thumbnail is a real frame from the file, so the tile is the button and
+   the remove control only appears on hover. */
+.pmr-asset {
+	position: relative;
+}
+
+.pmr-asset__thumb {
+	position: relative;
+	width: 100%;
+	padding: 0;
+	cursor: default;
+}
+
+.pmr-asset__thumb img,
+.pmr-asset__thumb video {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+}
+
+.pmr-asset__thumb:focus-visible {
+	outline: none;
+	border-color: var(--pmr-accent);
+}
+
+.pmr-asset__badge {
+	position: absolute;
+	left: 3px;
+	bottom: 3px;
+	padding: 1px 4px;
+	border-radius: 2px;
+	background: rgba(10, 10, 10, 0.8);
+	color: var(--pmr-timecode);
+	font-size: 8px;
+	letter-spacing: 0.4px;
+	text-transform: uppercase;
+}
+
+.pmr-asset__remove {
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	border: none;
+	border-radius: 3px;
+	background: rgba(10, 10, 10, 0.75);
+	color: var(--pmr-text-2);
+	opacity: 0;
+	cursor: default;
+	transition:
+		opacity 0.15s ease-out,
+		color 0.15s ease-out;
+}
+
+.pmr-asset:hover .pmr-asset__remove,
+.pmr-asset__remove:focus-visible {
+	opacity: 1;
+}
+
+.pmr-asset__remove:hover {
+	color: var(--pmr-err);
+}
+
+/* ── Audio tab rows ───────────────────────────────────────────────── */
+.pmr-audiorow {
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	padding: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.pmr-audiorow__head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11px;
+	color: var(--pmr-text-2);
+}
+
+.pmr-audiorow__clip {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 24px;
+	padding: 0 8px;
+	border-radius: 3px;
+	background: var(--pmr-track-audio);
+	font-size: 10px;
+	color: rgba(255, 255, 255, 0.92);
+}
+
+.pmr-audiorow__name {
+	flex: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pmr-audiorow__db {
+	font-variant-numeric: tabular-nums;
+	opacity: 0.85;
+}
+
+.pmr-blank code {
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 10px;
+	padding: 1px 4px;
+	border-radius: 3px;
+	background: rgba(255, 255, 255, 0.08);
+	color: var(--pmr-text-3);
+}
+
+/* Timeline drop target while an asset is dragged over it. */
+.pmr-tracks[data-dropping="true"]::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border: 1.5px dashed var(--pmr-accent);
+	border-radius: var(--pmr-radius-xs);
+	pointer-events: none;
+}
+
+/* ── Agent panel extras ───────────────────────────────────────────── */
+.pmr-suggestion {
+	width: 100%;
+	padding: 7px 9px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	color: var(--pmr-text-3);
+	font: inherit;
+	font-size: 11px;
+	line-height: 1.4;
+	text-align: left;
+	cursor: default;
+	transition:
+		border-color 0.15s ease-out,
+		color 0.15s ease-out,
+		background 0.15s ease-out;
+}
+
+.pmr-suggestion:hover {
+	border-color: var(--pmr-border);
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--pmr-text-2);
+}
+
+.pmr-agent__endpoint {
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--pmr-text-muted);
+	font: inherit;
+	font-size: 9px;
+	letter-spacing: 0.2px;
+	cursor: default;
+}
+
+.pmr-agent__endpoint:hover {
+	color: var(--pmr-text-3);
+}
+
+.pmr-send:not(:disabled):hover {
+	background: #fffaf0;
+}
+
+/* ── Preview overlays ─────────────────────────────────────────────── */
+.pmr-focus {
+	position: absolute;
+	width: 22px;
+	height: 22px;
+	margin-left: -11px;
+	margin-top: -11px;
+	border: 1.5px solid var(--pmr-timecode);
+	border-radius: 50%;
+	pointer-events: none;
+}
+
+.pmr-zoombadge {
+	position: absolute;
+	top: 8px;
+	left: 8px;
+	padding: 2px 6px;
+	border-radius: 3px;
+	background: rgba(0, 0, 0, 0.6);
+	border: 1px solid var(--pmr-timecode);
+	color: var(--pmr-timecode);
+	font-size: 9px;
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	pointer-events: none;
+}
+
+.pmr-preview__missing {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--pmr-bg-raised);
+	color: var(--pmr-text-muted);
+	font-size: 11px;
+}
+
+/* ── Titlebar refinements ─────────────────────────────────────────── */
+.pmr-titlebar__dot {
+	display: inline-block;
+	width: 5px;
+	height: 5px;
+	margin-left: 6px;
+	border-radius: 50%;
+	background: var(--pmr-text-muted);
+	vertical-align: middle;
+}
+
+.pmr-titlebar {
+	gap: 8px;
+}
+
+/* ── Track header controls ────────────────────────────────────────── */
+.pmr-track__kind {
+	width: 6px;
+	height: 6px;
+	flex: 0 0 6px;
+	border-radius: 3px;
+}
+
+.pmr-track__name {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	font-size: 11px;
+	text-align: left;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: default;
+}
+
+.pmr-track__rename {
+	flex: 1;
+	min-width: 0;
+	height: 17px;
+	padding: 0 4px;
+	border: 1px solid var(--pmr-accent);
+	border-radius: 2px;
+	background: rgba(0, 0, 0, 0.4);
+	color: var(--pmr-text);
+	font: inherit;
+	font-size: 11px;
+	outline: none;
+}
+
+/* Track tools stay out of the way until the row is hovered — four controls on
+   every track would otherwise shout louder than the clips. */
+.pmr-track__tools {
+	display: flex;
+	align-items: center;
+	gap: 1px;
+	opacity: 0;
+	transition: opacity 0.15s ease-out;
+}
+
+.pmr-track:hover .pmr-track__tools,
+.pmr-track__tools:focus-within {
+	opacity: 1;
+}
+
+.pmr-track__tool {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 15px;
+	height: 15px;
+	padding: 0;
+	border: none;
+	border-radius: 2px;
+	background: transparent;
+	color: var(--pmr-text-muted);
+	font-size: 9px;
+	cursor: default;
+	transition:
+		background 0.12s ease-out,
+		color 0.12s ease-out;
+}
+
+.pmr-track__tool:hover {
+	background: rgba(255, 255, 255, 0.12);
+	color: var(--pmr-text);
+}
+
+.pmr-track__tool[data-on="true"] {
+	color: var(--pmr-timecode);
+}
+
+/* ── Clip affordances ─────────────────────────────────────────────── */
+.pmr-clip__label {
+	pointer-events: none;
+}
+
+/* Trim handles: invisible until hover, so the clip stays clean but the edge is
+   always grabbable. */
+.pmr-clip__handle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 7px;
+	cursor: ew-resize;
+	opacity: 0;
+	transition: opacity 0.12s ease-out;
+}
+
+.pmr-clip__handle::after {
+	content: "";
+	position: absolute;
+	top: 3px;
+	bottom: 3px;
+	width: 2px;
+	border-radius: 1px;
+	background: var(--pmr-accent);
+}
+
+.pmr-clip__handle--l {
+	left: 0;
+}
+
+.pmr-clip__handle--l::after {
+	left: 2px;
+}
+
+.pmr-clip__handle--r {
+	right: 0;
+}
+
+.pmr-clip__handle--r::after {
+	right: 2px;
+}
+
+.pmr-clip:hover .pmr-clip__handle {
+	opacity: 0.85;
+}
+
+.pmr-clip {
+	cursor: grab;
+}
+
+.pmr-clip:active {
+	cursor: grabbing;
+}
+
+/* Media that a project references but this session can't see. */
+.pmr-clip[data-offline="true"] {
+	background-image: repeating-linear-gradient(
+		45deg,
+		rgba(0, 0, 0, 0.35) 0 6px,
+		transparent 6px 12px
+	);
+}
+
+/* ── Zoom lane ────────────────────────────────────────────────────── */
+.pmr-zoomlane {
+	position: absolute;
+	bottom: 0;
+	height: 4px;
+	background: var(--pmr-timecode);
+	border-radius: 2px 2px 0 0;
+	cursor: grab;
+}
+
+.pmr-zoomlane[data-active="true"] {
+	height: 6px;
+	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+.pmr-zoomlane__grip {
+	position: absolute;
+	top: -2px;
+	bottom: -2px;
+	width: 6px;
+	cursor: ew-resize;
+}
+
+.pmr-zoomlane__grip--l {
+	left: -2px;
+}
+
+.pmr-zoomlane__grip--r {
+	right: -2px;
+}
+
+/* ── Drag feedback ────────────────────────────────────────────────── */
+.pmr-snapline {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 1px;
+	background: var(--pmr-accent);
+	box-shadow: 0 0 4px rgba(245, 239, 228, 0.6);
+	pointer-events: none;
+	z-index: 5;
+}
+
+.pmr-marquee {
+	border: 1px solid var(--pmr-accent);
+	background: rgba(245, 239, 228, 0.1);
+	pointer-events: none;
+	z-index: 6;
+}
+
+/* ── Sheets ───────────────────────────────────────────────────────────
+   Modal only where focus genuinely has to be protected: an export you must
+   not edit underneath, and a reference you read then dismiss. */
+.pmr-sheet__scrim {
+	/* Fixed, not absolute: a sheet is modal over the window, and an absolute
+	   scrim only covers whichever panel happens to contain it. */
+	position: fixed;
+	inset: 0;
+	z-index: 80;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	background: rgba(10, 10, 10, 0.62);
+	backdrop-filter: blur(3px);
+	animation: pmr-fade 0.14s ease-out;
+}
+
+@keyframes pmr-fade {
+	from {
+		opacity: 0;
+	}
+}
+
+.pmr-sheet {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	max-width: 420px;
+	max-height: 100%;
+	border: 1px solid var(--pmr-border);
+	border-radius: var(--pmr-radius-md);
+	background: var(--pmr-bg-surface);
+	box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+	animation: pmr-sheet-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+	overflow: hidden;
+}
+
+.pmr-sheet--wide {
+	max-width: 620px;
+}
+
+@keyframes pmr-sheet-in {
+	from {
+		opacity: 0;
+		transform: translateY(10px) scale(0.98);
+	}
+}
+
+.pmr-sheet__head {
+	display: flex;
+	align-items: center;
+	height: 38px;
+	flex: 0 0 38px;
+	padding: 0 8px 0 14px;
+	border-bottom: 1px solid var(--pmr-border);
+	background: var(--pmr-bg-raised);
+}
+
+.pmr-sheet__title {
+	flex: 1;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--pmr-text);
+}
+
+.pmr-sheet__body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.pmr-sheet__body--columns {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: 18px;
+}
+
+.pmr-sheet__facts {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding-top: 4px;
+	font-size: 11px;
+	color: var(--pmr-text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.pmr-sheet__note {
+	margin: 0;
+	font-size: 11px;
+	line-height: 1.55;
+	color: var(--pmr-text-3);
+}
+
+.pmr-sheet__foot {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 10px 14px;
+	border-top: 1px solid var(--pmr-border);
+	background: var(--pmr-bg-raised);
+}
+
+.pmr-sheet__progress {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.pmr-progress {
+	height: 4px;
+	border-radius: 2px;
+	background: rgba(255, 255, 255, 0.12);
+	overflow: hidden;
+}
+
+.pmr-progress__fill {
+	display: block;
+	width: 100%;
+	height: 100%;
+	border-radius: 2px;
+	background: var(--pmr-accent);
+	/* Scaled rather than resized: width would relayout on every frame of a
+	   progress bar that updates continuously. */
+	transform-origin: left center;
+	transform: scaleX(var(--pmr-progress, 0));
+	transition: transform 0.2s linear;
+}
+
+.pmr-sheet__progresstext {
+	font-size: 11px;
+	color: var(--pmr-text-3);
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Shortcut reference ───────────────────────────────────────────── */
+.pmr-keys {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+
+.pmr-keys__group {
+	margin-bottom: 3px;
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.5px;
+	text-transform: uppercase;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-keys__row {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	font-size: 11px;
+	color: var(--pmr-text-3);
+}
+
+.pmr-kbd {
+	flex: 0 0 auto;
+	min-width: 78px;
+	padding: 2px 6px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: 3px;
+	background: rgba(0, 0, 0, 0.35);
+	color: var(--pmr-text-2);
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 10px;
+	text-align: center;
+}
+
+/* A waveform sits under the clip's label, not over it. */
+.pmr-clip__wave {
+	position: absolute;
+	inset: 4px 0;
+	width: 100%;
+	height: calc(100% - 8px);
+	pointer-events: none;
+}
+
+.pmr-clip__label {
+	position: relative;
+	z-index: 1;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.pmr-search {
+	width: 108px;
+	height: 18px;
+	padding: 0 6px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(0, 0, 0, 0.35);
+	color: var(--pmr-text);
+	font: inherit;
+	font-size: 10px;
+	outline: none;
+}
+
+.pmr-search:focus-visible {
+	border-color: var(--pmr-accent);
+}
+
+.pmr-asset__name {
+	display: block;
+	width: 100%;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--pmr-text-3);
+	font: inherit;
+	font-size: 10px;
+	text-align: left;
+	cursor: default;
+}
+
+.pmr-asset__rename {
+	width: 100%;
+	height: 16px;
+	padding: 0 3px;
+	border: 1px solid var(--pmr-accent);
+	border-radius: 2px;
+	background: rgba(0, 0, 0, 0.4);
+	color: var(--pmr-text);
+	font: inherit;
+	font-size: 10px;
+	outline: none;
+}
+
+/* ── Thinking indicator ───────────────────────────────────────────── */
+.pmr-thinking {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 10px;
+	padding: 7px 10px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(255, 255, 255, 0.04);
+	font-size: 11px;
+	color: var(--pmr-text-3);
+}
+
+.pmr-thinking__dots {
+	display: inline-flex;
+	gap: 3px;
+}
+
+.pmr-thinking__dots i {
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: var(--pmr-text-muted);
+	animation: pmr-think 1.1s ease-in-out infinite;
+}
+
+.pmr-thinking__dots i:nth-child(2) {
+	animation-delay: 0.15s;
+}
+
+.pmr-thinking__dots i:nth-child(3) {
+	animation-delay: 0.3s;
+}
+
+@keyframes pmr-think {
+	30% {
+		opacity: 0.25;
+		transform: translateY(-2px);
+	}
+}
+
+.pmr-thinking__stop {
+	margin-left: auto;
+	padding: 2px 8px;
+	border: 1px solid var(--pmr-border);
+	border-radius: 3px;
+	background: transparent;
+	color: var(--pmr-text-3);
+	font: inherit;
+	font-size: 10px;
+	cursor: default;
+}
+
+.pmr-thinking__stop:hover {
+	color: var(--pmr-text);
+	border-color: rgba(255, 255, 255, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pmr-thinking__dots i {
+		animation: none;
+	}
+}
+
+/* ── Caption cues ─────────────────────────────────────────────────── */
+.pmr-cuegroup {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	padding: 6px 10px;
+	background: var(--pmr-bg-raised);
+	border-bottom: 1px solid var(--pmr-border-subtle);
+	font-size: 10px;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-cuegroup span {
+	flex: 1;
+}
+
+.pmr-cue {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 5px 10px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+	font-size: 11px;
+	line-height: 1.45;
+	color: var(--pmr-text-3);
+}
+
+.pmr-cue[data-active="true"] {
+	background: rgba(245, 239, 228, 0.07);
+	color: var(--pmr-text);
+}
+
+.pmr-cue__time {
+	flex: 0 0 auto;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--pmr-timecode);
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 9px;
+	font-variant-numeric: tabular-nums;
+	cursor: default;
+}
+
+.pmr-cue__text {
+	flex: 1;
+	min-width: 0;
+	outline: none;
+	border-radius: 2px;
+	user-select: text;
+}
+
+.pmr-cue__text:focus {
+	background: rgba(0, 0, 0, 0.35);
+	box-shadow: 0 0 0 1px var(--pmr-accent);
+}
+
+/* Ruler ticks, the playhead and the snap line all start where the lanes do. */
+.pmr-ruler__lane {
+	position: absolute;
+	inset: 0;
+	margin-left: var(--pmr-track-header);
+}
+
+.pmr-playhead,
+.pmr-snapline {
+	margin-left: var(--pmr-track-header);
+}

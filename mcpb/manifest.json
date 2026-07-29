@@ -1,0 +1,29 @@
+{
+  "manifest_version": "0.4",
+  "name": "rendr",
+  "display_name": "Rendr",
+  "version": "0.1.0",
+  "description": "Record and edit video with Rendr from Claude Desktop.",
+  "long_description": "Connects Claude Desktop to the local MCP server inside Rendr, an open-source app that records and edits screen video in one place. Claude can list capture sources, start and stop recordings, and add zoom punch-ins driven by the cursor telemetry captured alongside the video. The editing tool surface is declared but still being built \u2014 those tools return an explicit not_implemented error rather than pretending to succeed.",
+  "author": {
+    "name": "Rendr contributors",
+    "url": "https://github.com/rendr-app/rendr-app"
+  },
+  "homepage": "https://github.com/rendr-app/rendr-app",
+  "license": "AGPL-3.0-or-later",
+  "keywords": ["video", "screen recording", "editor", "timeline", "zoom"],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 64" width="260" height="64" role="img" aria-labelledby="rendr-logo-title">
+  <title id="rendr-logo-title">Rendr</title>
+  <desc>The Rendr mark beside the rendr wordmark.</desc>
+
+  <!-- Mark — see rendr-mark.svg -->
+  <g fill="none" stroke="#F5EFE4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Viewport -->
+    <rect x="6" y="12" width="52" height="40" rx="10" stroke-width="4" />
+
+    <!-- Zoom reticle: four corner brackets closing on the record dot -->
+    <g stroke-width="2.4" opacity="0.45">
+      <path d="M20 27v-5h5" />
+      <path d="M44 27v-5h-5" />
+      <path d="M20 37v5h5" />
+      <path d="M44 37v5h-5" />
+    </g>
+  </g>
+
+  <!-- Record -->
+  <circle cx="32" cy="32" r="6" fill="#F29933" />
+
+  <!--
+    Wordmark drawn as stroked geometry rather than live text, so it renders
+    identically everywhere with no font dependency. One module throughout:
+    26px x-height, 5px stem, round caps.
+  -->
+  <g
+    transform="translate(80 12)"
+    fill="none"
+    stroke="#F5EFE4"
+    stroke-width="5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <!-- r -->
+    <path d="M2.5 40V16.5" />
+    <path d="M2.5 21C2.5 17 6 14.5 11 14.5" />
+
+    <!-- e -->
+    <path d="M18 27h22c0-7-5-12.5-11-12.5S18 20 18 27s5 13 11 13c4.5 0 8-2.5 9.5-6" />
+
+    <!-- n -->
+    <path d="M48.5 40V16" />
+    <path d="M48.5 22c0-5 4-7.5 8.5-7.5S65.5 17.5 65.5 23v17" />
+
+    <!-- d -->
+    <path d="M95 27c0-7-5-12.5-11.5-12.5S72 20 72 27s5 13 11.5 13S95 34.5 95 27" />
+    <path d="M95 0v40" />
+
+    <!-- r -->
+    <path d="M104.5 40V16.5" />
+    <path d="M104.5 21c0-4 3.5-6.5 8.5-6.5" />
+  </g>
+</svg>

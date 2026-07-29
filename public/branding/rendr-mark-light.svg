@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="rendr-mark-light-title">
+  <title id="rendr-mark-light-title">Rendr</title>
+  <desc>Light-background variant of the Rendr mark.</desc>
+
+  <!--
+    The two halves of what Rendr is, in one mark:
+      · the rounded frame is the canvas — the edit
+      · the orange dot is the record button — the capture
+      · the four brackets closing on the dot are the zoom punch-in
+    Palette is the app's own: Palmier's warm off-white accent (#F5EFE4) and the
+    timecode orange (#F29933) that marks zoom regions on the timeline.
+
+    Proportioned so it survives to 16px: below ~24px the brackets fade into the
+    frame's weight and the mark reads simply as frame + record dot, which is the
+    part that has to stay legible.
+  -->
+
+  <g fill="none" stroke="#141414" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Viewport -->
+    <rect x="6" y="12" width="52" height="40" rx="10" stroke-width="4" />
+
+    <!-- Zoom reticle: four corner brackets closing on the record dot -->
+    <g stroke-width="2.4" opacity="0.45">
+      <path d="M20 27v-5h5" />
+      <path d="M44 27v-5h-5" />
+      <path d="M20 37v5h5" />
+      <path d="M44 37v5h-5" />
+    </g>
+  </g>
+
+  <!-- Record -->
+  <circle cx="32" cy="32" r="6" fill="#F29933" />
+</svg>

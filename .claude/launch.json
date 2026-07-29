@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rendr-ui",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--config", "vite.ui.config.ts"],
+      "port": 5199
+    }
+  ]
+}

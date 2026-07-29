@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Rendr</title>
+  <!--
+    The app icon. The in-app mark is drawn on transparency in a warm off-white,
+    which disappears on a light dock — so the icon bakes in the app's own base
+    background and scales the mark to macOS's ~80% content box.
+  -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#242424" />
+      <stop offset="1" stop-color="#0C0C0C" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="228" fill="url(#plate)" />
+  <rect x="8" y="8" width="1008" height="1008" rx="224" fill="none"
+        stroke="rgba(255,255,255,0.10)" stroke-width="16" />
+
+  <g transform="translate(512 512) scale(11.5) translate(-32 -32)">
+    <g fill="none" stroke="#F5EFE4" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="6" y="12" width="52" height="40" rx="10" stroke-width="4" />
+      <g stroke-width="2.4" opacity="0.45">
+        <path d="M20 27v-5h5" />
+        <path d="M44 27v-5h-5" />
+        <path d="M20 37v5h5" />
+        <path d="M44 37v5h-5" />
+      </g>
+    </g>
+    <circle cx="32" cy="32" r="6" fill="#F29933" />
+  </g>
+</svg>
