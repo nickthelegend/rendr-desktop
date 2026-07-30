@@ -5,7 +5,7 @@
 // source, they land in the same shape, so everything downstream — the caption
 // track, word-level editing, the karaoke animation — works the same way.
 
-import { type ClipModel, DEFAULT_TEXT_STYLE, withDefaults } from "./model";
+import { type ClipModel, DEFAULT_TEXT_STYLE, type TextAnimation, withDefaults } from "./model";
 import type { TimelineModel, TrackModel } from "./reducers";
 
 export interface CaptionWord {
@@ -200,7 +200,7 @@ const CAPTION_STYLE = {
 	fontSize: 56,
 	bold: true,
 	alignment: "center" as const,
-	animation: "karaoke" as const,
+	animation: "karaoke" as TextAnimation,
 };
 
 export interface CaptionPlacement {

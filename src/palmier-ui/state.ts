@@ -860,6 +860,14 @@ export function useEditorState() {
 						{
 							groupId: "narration",
 							toFrame: (sourceMs) => Math.round((sourceMs / 1000) * fps),
+							// A subtitle is read at a glance, so the whole cue is
+							// on screen for its whole duration. Karaoke highlights
+							// one word at a time, which is right for a lyric and
+							// wrong for a line somebody is trying to read while
+							// also watching the demo. (Word timing is still stored
+							// on the clip, so switching the preset back is a style
+							// change and not a regeneration.)
+							style: { animation: "fade" },
 						},
 					).timeline;
 				}
