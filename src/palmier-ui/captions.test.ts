@@ -313,3 +313,44 @@ describe("subtitles cut from narration", () => {
 		expect(narrationCues([], 30)).toEqual([]);
 	});
 });
+
+describe("placing captions twice", () => {
+	const bare = {
+		id: "t",
+		name: "T",
+		fps: 30,
+		width: 1920,
+		height: 1080,
+		tracks: [] as never[],
+	} as unknown as import("./reducers").TimelineModel;
+	const cues = narrationCues(
+		[{ commentId: "a", startFrame: 5, seconds: 4, text: "one two three four five" }],
+		30,
+	);
+	const toFrame = (ms: number) => Math.round((ms / 1000) * 30);
+
+	it("replaces the group's track instead of adding a second one", () => {
+		// A state updater may run more than once for a single commit, so this
+		// has to be safe to repeat. It wasn't: two tracks ended up sharing
+		// `trk-cc-narration`, which React keys as duplicates and the compositor
+		// cannot tell apart — the captions vanished from the render entirely.
+		const once = placeCaptions(bare, cues, { groupId: "narration", toFrame }).timeline;
+		const twice = placeCaptions(once, cues, { groupId: "narration", toFrame }).timeline;
+
+		const ccTracks = twice.tracks.filter((t) => t.id === "trk-cc-narration");
+		expect(ccTracks).toHaveLength(1);
+		expect(new Set(twice.tracks.map((t) => t.id)).size).toBe(twice.tracks.length);
+		expect(ccTracks[0].clips.length).toBeGreaterThan(0);
+	});
+
+	it("leaves other tracks alone", () => {
+		const withVideo = {
+			...bare,
+			tracks: [
+				{ id: "v1", name: "V1", kind: "video", muted: false, hidden: false, clips: [] },
+			],
+		} as unknown as import("./reducers").TimelineModel;
+		const out = placeCaptions(withVideo, cues, { groupId: "narration", toFrame }).timeline;
+		expect(out.tracks.map((t) => t.id)).toContain("v1");
+	});
+});

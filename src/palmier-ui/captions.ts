@@ -278,8 +278,18 @@ export function placeCaptions(
 		clips: clips.sort((a, b) => a.startFrame - b.startFrame),
 	};
 
+	// Idempotent: a track for this group replaces the one that was there.
+	//
+	// Prepending unconditionally meant calling this twice produced two tracks
+	// carrying the same id — which React renders with duplicate keys and the
+	// compositor cannot tell apart, so the captions stopped appearing entirely.
+	// A state updater is allowed to run more than once for one commit (React
+	// does it in development), so "append once" is not a safe assumption; the
+	// operation has to be safe to repeat.
+	const withoutGroup = timeline.tracks.filter((entry) => entry.id !== track.id);
+
 	return {
-		timeline: { ...timeline, tracks: [track, ...timeline.tracks] },
+		timeline: { ...timeline, tracks: [track, ...withoutGroup] },
 		groupId: options.groupId,
 		clipCount: clips.length,
 	};
