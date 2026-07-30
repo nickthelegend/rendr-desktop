@@ -2015,6 +2015,71 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 	},
 ];
 
+export const CLIP_EDIT_TOOLS: AgentTool[] = [
+	{
+		name: "duplicate_clips",
+		description:
+			"Copies clips and places each copy immediately after its original on the same track, pushing nothing aside — a copy that overwrote its neighbour would be a move, not a duplicate. Returns the new clip ids so the copies can be edited straight away. Undoable as one step.\n\nUse for repeating a beat, or for making a variant to grade differently while keeping the original.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clip ids from get_timeline.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "nudge_clips",
+		description:
+			"Shifts clips along their own track by a number of frames — negative earlier, positive later. The whole set moves together, so relative timing inside the selection is preserved, and nothing is pushed past frame 0.\n\nThis is the tool for fixing sync by a few frames. For a large move, or to another track, use move_clips.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clip ids from get_timeline.",
+				},
+				deltaFrames: {
+					type: "number",
+					description: "Frames to shift by. Negative moves earlier.",
+				},
+			},
+			["clipIds", "deltaFrames"],
+		),
+	},
+	{
+		name: "trim_clips",
+		description:
+			"Trims a clip's head or tail to a frame, adjusting its source offset so the picture doesn't slide — trimming the head keeps the same frame visible at the new start rather than showing earlier footage.\n\nPass toFrame to trim to an absolute frame, or atPlayhead:true to trim to where the playhead is, which is the common case. edge picks which end.\n\nTrimming is not the same as moving: the clip's other edge stays where it is, so the timeline around it is undisturbed. Undoable.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clip ids. With atPlayhead, several can be trimmed at once.",
+				},
+				edge: {
+					type: "string",
+					enum: ["start", "end"],
+					description: "Which end to trim. Default end.",
+				},
+				toFrame: {
+					type: "number",
+					description: "Absolute frame to trim to. Ignored when atPlayhead is true.",
+				},
+				atPlayhead: {
+					type: "boolean",
+					description: "Trim to the playhead instead of a given frame.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+];
+
 export const WORKFLOW_RUN_TOOLS: AgentTool[] = [
 	{
 		name: "run_workflow",
@@ -2272,6 +2337,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...RECORDING_TOOLS,
 	...NARRATION_TOOLS,
 	...WORKFLOW_TOOLS,
+	...CLIP_EDIT_TOOLS,
 	...WORKFLOW_RUN_TOOLS,
 	...ZOOM_TOOLS,
 ];

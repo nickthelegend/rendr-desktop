@@ -74,10 +74,12 @@ import {
 	addTrack,
 	addZoomRegion,
 	totalFrames as computeTotalFrames,
+	duplicateClips,
 	findClip,
 	layoutClips,
 	mergeRanges,
 	moveClip,
+	nudgeClips,
 	removeClips,
 	removeTrack,
 	removeZoomRegion,
@@ -102,6 +104,9 @@ import {
 	splitAt,
 	type TimelineModel,
 	toggleSolo,
+	trimClipEnd,
+	trimClipStart,
+	trimSelectionToPlayhead,
 	updateZoomRegion,
 } from "./reducers";
 import { compareScopes, HUE_BIN_NAMES, measureScopes } from "./scopes";
@@ -1766,6 +1771,103 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		duplicate_clips(args) {
+			const clipIds = asArray(args.clipIds).filter(
+				(value): value is string => typeof value === "string",
+			);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			// The new ids are computed from the timeline in hand, not read back
+			// after the commit — a receipt has to describe what happened.
+			const { newIds } = duplicateClips(timeline, clipIds);
+			return mutate(
+				"Duplicate clips",
+				(t) => duplicateClips(t, clipIds).timeline,
+				() => ({
+					duplicated: clipIds.length,
+					newClipIds: newIds,
+					note: "Each copy sits immediately after its original on the same track; nothing was pushed aside.",
+				}),
+			);
+		},
+
+		nudge_clips(args) {
+			const clipIds = asArray(args.clipIds).filter(
+				(value): value is string => typeof value === "string",
+			);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const delta = asNumber(args.deltaFrames);
+			if (delta === null || delta === 0) {
+				return fail("invalid_argument", "deltaFrames must be a non-zero number.");
+			}
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			return mutate(
+				"Nudge clips",
+				(t) => nudgeClips(t, clipIds, Math.round(delta)),
+				(next) => ({
+					nudged: clipIds.map((id) => {
+						const clip = findClip(next, id);
+						return clip ? { id, frames: [clip.startFrame, clip.endFrame] } : { id };
+					}),
+					note: "The set moved together, so relative timing inside it is unchanged. Nothing was pushed past frame 0.",
+				}),
+			);
+		},
+
+		trim_clips(args) {
+			const clipIds = asArray(args.clipIds).filter(
+				(value): value is string => typeof value === "string",
+			);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			const edge = asString(args.edge) === "start" ? "start" : "end";
+			const atPlayhead = args.atPlayhead === true;
+			const toFrame = asNumber(args.toFrame);
+			if (!atPlayhead && toFrame === null) {
+				return fail(
+					"invalid_argument",
+					"Pass toFrame, or atPlayhead:true to trim to the playhead.",
+				);
+			}
+
+			return mutate(
+				"Trim clips",
+				(t) =>
+					atPlayhead
+						? trimSelectionToPlayhead(t, clipIds, Math.round(state.playhead), edge)
+						: clipIds.reduce(
+								(acc, id) =>
+									edge === "start"
+										? trimClipStart(acc, id, Math.round(toFrame ?? 0))
+										: trimClipEnd(acc, id, Math.round(toFrame ?? 0)),
+								t,
+							),
+				(next) => ({
+					edge,
+					clips: clipIds.map((id) => {
+						const clip = findClip(next, id);
+						return clip
+							? {
+									id,
+									frames: [clip.startFrame, clip.endFrame],
+									trimStart: clip.trimStartFrame,
+								}
+							: { id, missing: true };
+					}),
+					note: "The other edge stayed put, so the timeline around the clip is undisturbed. The source offset moved with the head, so the picture didn't slide.",
+				}),
+			);
 		},
 
 		async run_workflow(args) {
