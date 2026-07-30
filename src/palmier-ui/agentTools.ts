@@ -161,7 +161,7 @@ import {
 	type WorkflowModel,
 	workflowIssues,
 } from "./workflow";
-import { ASPECTS, reframeClips, runWorkflow } from "./workflowRun";
+import { ASPECTS, followKeyframes, reframeClips, runWorkflow } from "./workflowRun";
 import { cursorFocusAt, DEFAULT_ZOOM_TIMING, scaleForDepth, ZOOM_TIMING_LIMITS } from "./zoom";
 
 export interface ToolResult {
@@ -2091,11 +2091,35 @@ export function createAgentTools(api: EditorApi) {
 				);
 			}
 
+			// Following is the point of a vertical crop of a screen recording, so
+			// it is on whenever there is telemetry to follow.
+			const follow = args.followCursor !== false && state.cursorTelemetry.length > 0;
+
 			return mutate(
 				"Reframe",
-				(t) => reframeClips(t, aspect),
+				(t) => {
+					const reframed = reframeClips(t, aspect);
+					if (!follow) return reframed;
+					return reframed.tracks
+						.filter((track) => track.kind === "video")
+						.flatMap((track) => track.clips)
+						.filter((clip) => clip.mediaType !== "text")
+						.reduce((acc, clip) => {
+							const keys = followKeyframes(state.cursorTelemetry, {
+								clipStartFrame: clip.startFrame,
+								clipEndFrame: clip.endFrame,
+								trimStartFrame: clip.trimStartFrame,
+								fps: t.fps,
+								width: clip.transform.width,
+							});
+							return keys.length === 0
+								? acc
+								: setClipKeyframes(acc, clip.id, "position", keys);
+						}, reframed);
+				},
 				(next) => ({
 					aspect: name,
+					followingCursor: follow,
 					clips: next.tracks
 						.filter((track) => track.kind === "video")
 						.flatMap((track) => track.clips)
@@ -2105,7 +2129,9 @@ export function createAgentTools(api: EditorApi) {
 							width: Number(clip.transform.width.toFixed(3)),
 							height: clip.transform.height,
 						})),
-					note: "The frame keeps its pixel size; the footage is centred and cover-fitted, so nothing is letterboxed. Text and captions were left alone — they are composed for the frame, not cropped from a source.",
+					note: follow
+						? "The frame keeps its pixel size and the crop pans to keep the pointer in shot, smoothed so it follows the subject rather than mirroring the mouse. Text and captions were left alone — they are composed for the frame, not cropped from a source."
+						: "The frame keeps its pixel size; the footage is centred and cover-fitted, so nothing is letterboxed. Text and captions were left alone.",
 				}),
 			);
 		},

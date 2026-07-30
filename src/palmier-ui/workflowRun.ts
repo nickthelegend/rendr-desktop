@@ -405,3 +405,79 @@ export async function runWorkflow(
 		...(outputPath ? { outputPath } : {}),
 	};
 }
+
+/**
+ * Where the crop should sit, frame by frame, to keep the cursor in shot.
+ *
+ * Centring a 16:9 recording into 9:16 shows the middle of the screen, which is
+ * often not where the work is happening — a sidebar click or a button in the
+ * corner falls outside the crop entirely. The telemetry already says where the
+ * pointer was, so the crop can follow it.
+ *
+ * Sampled sparsely and smoothed rather than keyed per frame: a crop that tracks
+ * every jitter is unwatchable, and the point of following is to keep the
+ * subject in shot, not to mirror the mouse. Returns position keyframes in the
+ * transform's own units, clamped so the crop never runs off the footage.
+ */
+export function followKeyframes(
+	telemetry: readonly { timeMs: number; cx: number; cy: number }[],
+	options: {
+		clipStartFrame: number;
+		clipEndFrame: number;
+		trimStartFrame: number;
+		fps: number;
+		/** How wide the footage is, in frames of the output. 1 means it fits. */
+		width: number;
+		/** Frames between samples. Larger is calmer. */
+		everyFrames?: number;
+	},
+): Array<{ frame: number; values: [number, number]; interp: "smooth" }> {
+	const { clipStartFrame, clipEndFrame, trimStartFrame, fps, width } = options;
+	const step = Math.max(1, Math.round(options.everyFrames ?? 12));
+	if (telemetry.length === 0 || width <= 1) return [];
+
+	// The crop can only travel this far before it exposes an edge.
+	const reach = (width - 1) / 2;
+
+	const sampleAt = (sourceMs: number) => {
+		let nearest = telemetry[0];
+		let best = Number.POSITIVE_INFINITY;
+		for (const point of telemetry) {
+			const distance = Math.abs(point.timeMs - sourceMs);
+			if (distance < best) {
+				best = distance;
+				nearest = point;
+			}
+		}
+		return nearest;
+	};
+
+	const raw: Array<{ frame: number; cx: number }> = [];
+	for (let frame = 0; frame <= clipEndFrame - clipStartFrame; frame += step) {
+		const sourceMs = ((trimStartFrame + frame) / fps) * 1000;
+		raw.push({ frame, cx: sampleAt(sourceMs).cx });
+	}
+	if (raw.length === 0) return [];
+
+	// A moving average over five samples, so a flick of the wrist doesn't pan
+	// the whole frame. This is what separates following from mirroring.
+	const smoothed = raw.map((point, index) => {
+		const from = Math.max(0, index - 2);
+		const to = Math.min(raw.length - 1, index + 2);
+		let sum = 0;
+		for (let i = from; i <= to; i++) sum += raw[i].cx;
+		return { frame: point.frame, cx: sum / (to - from + 1) };
+	});
+
+	return smoothed.map((point) => {
+		// The pointer sits at cx of the source; the crop centres on it, held
+		// inside the footage so no edge is ever exposed.
+		const wanted = 0.5 + (0.5 - point.cx) * (width - 1);
+		const centerX = Math.min(0.5 + reach, Math.max(0.5 - reach, wanted));
+		return {
+			frame: point.frame,
+			values: [Number(centerX.toFixed(4)), 0.5] as [number, number],
+			interp: "smooth" as const,
+		};
+	});
+}

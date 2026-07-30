@@ -2093,6 +2093,11 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 					enum: ["9:16", "1:1", "4:5", "16:9"],
 					description: "Target aspect as width:height.",
 				},
+				followCursor: {
+					type: "boolean",
+					description:
+						"Default true when the recording carries cursor telemetry. Pans the crop to keep the pointer in shot instead of holding the centre — a centred vertical crop of a screen recording often misses the sidebar or corner where the work is happening. The motion is smoothed, so it follows the subject rather than mirroring every flick, and clamped so no edge is ever exposed. Pass false to hold the centre.",
+				},
 			},
 			["aspect"],
 		),
