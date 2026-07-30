@@ -2017,6 +2017,25 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 
 export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
+		name: "match_color",
+		description:
+			"Grades one clip to match another. Renders a frame from each, measures both, and applies the exposure, contrast, saturation, temperature and tint that close the gap.\n\nThis is the tool for the shot that doesn't cut with the one before it — a take recorded under different light, or a clip from another session.\n\nThe correction is applied on top of whatever the clip already carries rather than replacing it, because a match is a correction and not a reset: discarding a look somebody chose in order to fix exposure would be the wrong trade. Pass measureOnly to see the gap and the grade it would apply without changing anything.\n\nOnly the five global controls. Matching shadows and highlights separately needs a per-band solve a mean-luma comparison cannot honestly support, and guessing would produce a grade that measures closer while looking worse. A gap under what anyone can see is left alone rather than dirtying the grade for no visible gain. Undoable.",
+		inputSchema: object(
+			{
+				clipId: { type: "string", description: "The clip to change." },
+				referenceClipId: {
+					type: "string",
+					description: "The clip to match. Left untouched.",
+				},
+				measureOnly: {
+					type: "boolean",
+					description: "Report the gap and the grade it would apply, and change nothing.",
+				},
+			},
+			["clipId", "referenceClipId"],
+		),
+	},
+	{
 		name: "normalize_audio",
 		description:
 			"Measures each clip's actual loudness and sets its level to match a target, so a demo doesn't jump in volume between a screen recording and a narration line.\n\nThe average is taken over the audible passages only — a take with thirty seconds of silence at the head is not quiet, and averaging the silence in would push the gain far too high.\n\nGain is held back rather than clipping: if reaching the target would push the peak past the ceiling, it goes as far as it can and reports the shortfall, because reaching a target by clipping the transients is not reaching it. Call with measureOnly to read the levels without changing anything.\n\nThis is unweighted program RMS, not ITU-R BS.1770, so the figures are not LUFS and are not labelled as such. For matching clips from the same capture, which is what this is for, that is the number that matters. Undoable.",

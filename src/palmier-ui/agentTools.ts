@@ -114,7 +114,13 @@ import {
 	trimSelectionToPlayhead,
 	updateZoomRegion,
 } from "./reducers";
-import { compareScopes, HUE_BIN_NAMES, measureScopes } from "./scopes";
+import {
+	compareScopes,
+	correctionFor,
+	HUE_BIN_NAMES,
+	measureScopes,
+	worthCorrecting,
+} from "./scopes";
 import { type CaptureSource, clipSourceMsToFrame, type EditorApi, formatTimecode } from "./state";
 import {
 	DEFAULT_VOICE,
@@ -1776,6 +1782,118 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		async match_color(args) {
+			const clipId = asString(args.clipId);
+			const referenceClipId = asString(args.referenceClipId);
+			if (!clipId || !referenceClipId) {
+				return fail("invalid_argument", "clipId and referenceClipId are both required.");
+			}
+			if (clipId === referenceClipId) {
+				return fail("invalid_argument", "A clip already matches itself.");
+			}
+			const subject = findClip(timeline, clipId);
+			const reference = findClip(timeline, referenceClipId);
+			if (!subject) return fail("unknown_clip", `No clip '${clipId}'.`);
+			if (!reference) return fail("unknown_clip", `No clip '${referenceClipId}'.`);
+			for (const clip of [subject, reference]) {
+				if (clip.mediaType === "text" || clip.mediaType === "audio") {
+					return fail("wrong_media_type", `'${clip.name}' has no picture to measure.`);
+				}
+			}
+
+			/*
+			 * A frame from the middle of each clip, rendered on its own.
+			 *
+			 * Isolated the way inspect_color does it, so a caption or another
+			 * track above cannot end up in the measurement — matching a clip to
+			 * a subtitle's white text would be nonsense.
+			 */
+			const measure = async (clip: ClipModel) => {
+				const isolated: TimelineModel = {
+					...timeline,
+					tracks: timeline.tracks.map((track) => ({
+						...track,
+						clips: track.clips.filter((entry) => entry.id === clip.id),
+					})),
+				};
+				const frame = Math.round((clip.startFrame + clip.endFrame) / 2);
+				const rendered = await renderFrameToCanvas(isolated, state.assets, frame, 480);
+				if (!rendered) return null;
+				const context = rendered.canvas.getContext("2d", { willReadFrequently: true });
+				if (!context) return null;
+				return measureScopes(
+					context.getImageData(0, 0, rendered.width, rendered.height).data,
+				);
+			};
+
+			const subjectScopes = await measure(subject);
+			const referenceScopes = await measure(reference);
+			if (!subjectScopes || !referenceScopes) {
+				return fail(
+					"render_failed",
+					"Couldn't render a frame from one of those clips. Its media may need relinking.",
+				);
+			}
+
+			/*
+			 * A frame with nothing in it cannot be matched to anything.
+			 *
+			 * Offline media renders black, and comparing black to black reports a
+			 * perfect match — which is how this tool came to say two visibly
+			 * different grades already matched. Measuring nothing and calling it
+			 * a match is worse than refusing.
+			 */
+			for (const [name, scopes] of [
+				[subject.name, subjectScopes],
+				[reference.name, referenceScopes],
+			] as const) {
+				if (scopes.whitePoint < 0.02) {
+					return fail(
+						"nothing_to_measure",
+						`'${name}' rendered as an empty frame, so there is nothing to measure. Its media is probably offline — check get_media and relink it.`,
+					);
+				}
+			}
+
+			const gap = compareScopes(subjectScopes, referenceScopes);
+			if (!worthCorrecting(gap)) {
+				return ok({
+					changed: false,
+					gap: gap.hints,
+					note: "Those already match to within what anyone can see, so the grade was left alone.",
+				});
+			}
+
+			const corrected = correctionFor(gap, {
+				exposure: subject.color.exposure,
+				contrast: subject.color.contrast,
+				saturation: subject.color.saturation,
+				temperature: subject.color.temperature,
+				tint: subject.color.tint,
+			});
+
+			if (args.measureOnly === true) {
+				return ok({
+					measureOnly: true,
+					gap: gap.hints,
+					wouldApply: corrected,
+					note: "Nothing was changed.",
+				});
+			}
+
+			return mutate(
+				"Match colour",
+				(t) => setClipColor(t, [clipId], corrected),
+				() => ({
+					matched: clipId,
+					to: referenceClipId,
+					applied: corrected,
+					gap: gap.hints,
+					note: "Applied on top of the clip's existing grade, so a look it already carried was kept.",
+				}),
+			);
 		},
 
 		async normalize_audio(args) {

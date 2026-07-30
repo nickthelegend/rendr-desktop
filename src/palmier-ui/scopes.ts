@@ -218,3 +218,58 @@ export const HUE_BIN_NAMES = [
 	"magenta",
 	"rose",
 ];
+
+export interface GradeCorrection {
+	exposure: number;
+	contrast: number;
+	saturation: number;
+	temperature: number;
+	tint: number;
+}
+
+/**
+ * Turns a measured gap into grade values that close it.
+ *
+ * `compareScopes` says which knob to turn and by roughly how much; this is the
+ * arithmetic that actually turns them, in the grade model's own units. The
+ * scale factors are the same ones the hints quote, so the numbers a caller is
+ * told and the numbers applied cannot drift apart.
+ *
+ * Applied on top of whatever the clip already carries rather than replacing it,
+ * because a match is a correction, not a reset — throwing away a look somebody
+ * chose in order to match exposure would be the wrong trade.
+ *
+ * Deliberately only the five global controls. Matching shadows and highlights
+ * separately needs a per-band solve that a single mean-luma comparison cannot
+ * honestly support, and guessing at it would produce a grade that measures
+ * closer while looking worse.
+ */
+export function correctionFor(gap: ScopeGap, current: GradeCorrection): GradeCorrection {
+	return {
+		// The hint quotes exposure * 3, so the correction uses the same factor.
+		exposure: round(current.exposure + gap.exposure * 3, 3),
+		// Multiplicative: a contrast of 1 is neutral, so a delta scales it.
+		contrast: round(Math.max(0.2, current.contrast + gap.contrast), 3),
+		saturation: round(Math.max(0, current.saturation + gap.saturation * 2), 3),
+		// Warmer means a lower colour temperature in Kelvin, hence the negation.
+		temperature: Math.round(current.temperature - gap.warmCool * 6000),
+		tint: round(current.tint + gap.greenMagenta, 3),
+	};
+}
+
+/**
+ * Whether a gap is worth correcting at all.
+ *
+ * Below these the difference is under what anyone can see, and applying a
+ * correction anyway would dirty a clip's grade for no visible gain — and make
+ * a receipt claim work that had no effect.
+ */
+export function worthCorrecting(gap: ScopeGap): boolean {
+	return (
+		Math.abs(gap.exposure) > 0.01 ||
+		Math.abs(gap.contrast) > 0.01 ||
+		Math.abs(gap.saturation) > 0.01 ||
+		Math.abs(gap.warmCool) > 0.008 ||
+		Math.abs(gap.greenMagenta) > 0.008
+	);
+}
