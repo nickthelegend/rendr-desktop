@@ -1,4 +1,5 @@
 import { BrowserWindow } from "electron";
+import { registerLutIpc } from "./lut";
 import { registerAssetHandlers } from "./register/assets";
 import { registerCaptionHandlers } from "./register/captions";
 import { registerExportHandlers } from "./register/export";
@@ -74,4 +75,5 @@ export function registerIpcHandlers(
 	// model is missing rather than being absent themselves, so the renderer can
 	// offer to install it instead of finding no channel at all.
 	registerVoiceIpc();
+	registerLutIpc();
 }

@@ -2765,6 +2765,199 @@ export const LOOK_TOOLS: AgentTool[] = [
 	},
 ];
 
+/**
+ * Motion and colour.
+ *
+ * The motion tools all write position/scale keyframes, which the preview and
+ * the encoder already animate — nothing here adds a rendering path, which is
+ * why none of it can disagree between preview and export.
+ */
+export const MOTION_TOOLS: AgentTool[] = [
+	{
+		name: "add_ken_burns",
+		description:
+			"Add a slow push, pull, or drift across a clip — the move that keeps a still image or a static screen recording from looking frozen. Writes scale and position keyframes across the clip's full length, so it animates in the preview and the export identically. direction sets where it goes: 'in' pushes toward the centre or toward focusX/focusY, 'out' pulls back, and the compass directions pan without zooming. Existing position and scale keyframes on the clip are replaced, because two competing moves on one clip is not a move anyone asked for.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to animate.",
+				},
+				direction: {
+					type: "string",
+					enum: ["in", "out", "left", "right", "up", "down"],
+					description: "Default 'in'.",
+				},
+				amount: {
+					type: "number",
+					description:
+						"How far it travels, 0–1. Default 0.12, which is a slow drift. Above about 0.3 the movement is obvious rather than invisible, and on a screen recording it will read as a mistake.",
+				},
+				focusX: {
+					type: "number",
+					description:
+						"Where a push ends up, 0–1 across the frame. Default 0.5. Ignored by the compass directions.",
+				},
+				focusY: { type: "number", description: "Same, down the frame. Default 0.5." },
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "crop_clips",
+		description:
+			"Crop clips by trimming edges away. Each side is a fraction of the frame, 0–1: left 0.1 removes the leftmost tenth. The remaining picture keeps its position and scale, so cropping alone makes the visible image smaller rather than reframing it — pair it with set_clip_properties transform, or use apply_layout, to fill the frame afterward. Values merge, so cropping only the top leaves the other three sides where they were. Opposite sides must leave something behind: left + right below 1, top + bottom below 1.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to crop.",
+				},
+				top: { type: "number", description: "Fraction removed from the top, 0–1." },
+				right: { type: "number", description: "Fraction removed from the right." },
+				bottom: { type: "number", description: "Fraction removed from the bottom." },
+				left: { type: "number", description: "Fraction removed from the left." },
+				reset: {
+					type: "boolean",
+					description: "Clear the crop entirely, ignoring the other values.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "add_motion_preset",
+		description:
+			"Animate a clip on or off screen — the entrance and exit moves a title needs. 'slide' travels in from an edge, 'pop' scales up from small, 'fade' ramps opacity, 'drift' is a slow continuous move with no settle. Writes keyframes over the first or last durationFrames of the clip and leaves the middle alone, so a title can have an entrance and an exit from two calls. For fades alone, set_clip_properties fadeInFrames is simpler; this is for movement.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to animate.",
+				},
+				preset: {
+					type: "string",
+					enum: ["slide", "pop", "fade", "drift"],
+					description: "Which move.",
+				},
+				at: {
+					type: "string",
+					enum: ["in", "out"],
+					description:
+						"Entrance or exit. Default 'in'. An exit reverses the move and puts it at the clip's end.",
+				},
+				from: {
+					type: "string",
+					enum: ["left", "right", "top", "bottom"],
+					description: "Which edge a slide or drift travels from. Default 'bottom'.",
+				},
+				durationFrames: {
+					type: "integer",
+					description:
+						"How long the move takes. Default 12. Clamped to half the clip so an entrance and an exit cannot overlap.",
+				},
+			},
+			["clipIds", "preset"],
+		),
+	},
+	{
+		name: "auto_color",
+		description:
+			"Correct a clip's colour automatically, toward neutral or toward a reference clip. Measures the picture, works out what exposure, contrast, saturation and temperature would close the gap, and applies it. With referenceClipId this is a one-way match_color; without one, it corrects toward a neutral mid-grey world, which fixes the usual screen-recording problems — a washed-out capture, a display running warm.\n\nRefuses when the measured gap is too small to be worth a grade, rather than applying a change nobody can see and reporting success. Reports the values it chose so they can be adjusted with apply_color afterward.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to correct.",
+				},
+				referenceClipId: {
+					type: "string",
+					description:
+						"Match toward this clip instead of toward neutral. It is not modified.",
+				},
+				strength: {
+					type: "number",
+					description:
+						"How much of the correction to apply, 0–1. Default 1. Use 0.5 to halve it when a full correction overshoots.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "apply_lut",
+		description:
+			"Load a .cube LUT and apply it to clips. Reads the file from disk, parses it, and stores it on each clip's grade, where both the preview and the encoder run it through the same pixel path. amount is a dry/wet mix, so a strong creative LUT can be dialled back without editing the file. A LUT sits on top of the other colour knobs rather than replacing them — exposure and contrast still apply, and are computed before the LUT. Rejects a malformed or non-3D cube file with the reason, rather than loading something that renders as garbage.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to grade.",
+				},
+				path: {
+					type: "string",
+					description: "Absolute path to a .cube file. Pass this or lutText.",
+				},
+				lutText: {
+					type: "string",
+					description: "The contents of a .cube file, for a LUT not on disk.",
+				},
+				amount: {
+					type: "number",
+					description: "Dry/wet mix, 0–1. Default 1 (fully applied).",
+				},
+				remove: {
+					type: "boolean",
+					description: "Take the LUT off these clips, leaving the rest of the grade.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "reset_grade",
+		description:
+			"Put clips back to neutral — no exposure, contrast, saturation, temperature, curves, balance, hue curves, or LUT. Effects and transforms are untouched unless includeEffects is set. This is the honest way back from a grade that went wrong, rather than guessing at inverse values, and it is what undo cannot give you once other edits have landed on top.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to reset.",
+				},
+				includeEffects: {
+					type: "boolean",
+					description: "Also remove every effect on the clip. Default false.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "check_color_consistency",
+		description:
+			"Find the clip that does not match the others. Measures every clip, takes the middle of the set as the reference, and reports how far each one sits from it in exposure, contrast, saturation and colour temperature — so the one shot that was recorded on a different display, or after the lights changed, is named rather than hunted for. Read-only. Pass the outliers to auto_color with the reference clip to bring them in line.",
+		inputSchema: object({
+			clipIds: {
+				type: "array",
+				items: { type: "string" },
+				description:
+					"Clips to compare. Omit for every video and image clip on the timeline.",
+			},
+			tolerance: {
+				type: "number",
+				description:
+					"How far a clip may sit from the middle before it is called an outlier. Default 0.08.",
+			},
+		}),
+	},
+];
+
 /** Everything the MCP server advertises. */
 export const MCP_TOOLS: AgentTool[] = [
 	...EDITING_TOOLS,
@@ -2777,6 +2970,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...ZOOM_TOOLS,
 	...ARRANGE_TOOLS,
 	...LOOK_TOOLS,
+	...MOTION_TOOLS,
 ];
 
 export const TOOLS_BY_NAME = new Map(MCP_TOOLS.map((tool) => [tool.name, tool]));

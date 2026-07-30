@@ -124,6 +124,7 @@ import {
 	correctionFor,
 	HUE_BIN_NAMES,
 	measureScopes,
+	type Scopes,
 	worthCorrecting,
 } from "./scopes";
 import { type CaptureSource, clipSourceMsToFrame, type EditorApi, formatTimecode } from "./state";
@@ -322,6 +323,30 @@ function gapsOf(clips: readonly ClipModel[], end: number): Array<[number, number
 }
 
 /**
+ * A neutral world, for correcting toward when there is no reference clip.
+ *
+ * Mid-grey at 0.5 with the full range present and no colour cast. Correcting
+ * toward this is what fixes the usual screen-recording faults — a washed-out
+ * capture sitting in a narrow band, a display running warm — without needing a
+ * second clip to compare against.
+ */
+const NEUTRAL_SCOPES: Scopes = {
+	blackPoint: 0,
+	whitePoint: 1,
+	clippedShadows: 0,
+	clippedHighlights: 0,
+	meanLuma: 0.5,
+	mean: { r: 0.5, g: 0.5, b: 0.5 },
+	shadows: 0.2,
+	midtones: 0.5,
+	highlights: 0.8,
+	saturation: 0.25,
+	warmCool: 0,
+	greenMagenta: 0,
+	hueHistogram: new Array(12).fill(0),
+};
+
+/**
  * How different two sampled frames are, as one 0–1 number.
  *
  * compareScopes answers "which knob would close this gap", which is the right
@@ -435,6 +460,48 @@ export function createAgentTools(api: EditorApi) {
 		// edit landing in the same tick isn't clobbered by a stale snapshot.
 		commit(label, (current) => (current === timeline ? next : reduce(current)));
 		return ok(receipt(next));
+	};
+
+	/**
+	 * Measures one clip's picture at its midpoint.
+	 *
+	 * Renders the clip on its own rather than the composited timeline, so what
+	 * is measured is that clip's colour and not whatever happens to be layered
+	 * over it. inspect_color does the same thing for a single call; the colour
+	 * tools that work across many clips share this.
+	 */
+	const scopesForClip = async (
+		clipId: string,
+	): Promise<{ ok: true; scopes: Scopes } | { ok: false; reason: string }> => {
+		const clip = findClip(timeline, clipId);
+		if (!clip) return { ok: false, reason: `No clip '${clipId}'.` };
+		const frame = Math.floor((clip.startFrame + clip.endFrame) / 2);
+		// Measuring one clip means measuring it alone: the stack above it would
+		// otherwise be what the numbers describe. Rendered without the overlays
+		// too, since a white pointer would pull the scopes toward a grade
+		// nobody made.
+		const isolated: TimelineModel = {
+			...timeline,
+			tracks: timeline.tracks.map((track) => ({
+				...track,
+				hidden: false,
+				clips: track.clips.filter((entry) => entry.id === clip.id),
+			})),
+		};
+		const result = await renderFrameToCanvas(isolated, state.assets, frame, 640);
+		if (!result)
+			return { ok: false, reason: `Couldn't render '${clip.name}' at frame ${frame}.` };
+		const context = result.canvas.getContext("2d", { willReadFrequently: true });
+		if (!context) return { ok: false, reason: "Couldn't read the rendered frame." };
+		const scopes = measureScopes(context.getImageData(0, 0, result.width, result.height).data);
+		// Two black frames measure identical, which is what made match_color
+		// call them a match. The same guard belongs on every reader.
+		if (scopes.whitePoint < 0.02)
+			return {
+				ok: false,
+				reason: `'${clip.name}' is black at frame ${frame} — there is nothing to measure.`,
+			};
+		return { ok: true, scopes };
 	};
 
 	/** Source aspect for a clip; the canvas ratio is the honest fallback. */
@@ -5681,6 +5748,563 @@ export function createAgentTools(api: EditorApi) {
 					spread > 6
 						? `These clips vary by ${spread.toFixed(1)} dB, which is audible as a jump between them. normalize_audio evens it out.`
 						: "Nothing was changed. normalize_audio applies the suggested gains.",
+			});
+		},
+
+		// ── Motion and colour ─────────────────────────────────────────────
+
+		add_ken_burns(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			const direction = asString(args.direction) ?? "in";
+			if (!["in", "out", "left", "right", "up", "down"].includes(direction))
+				return fail("invalid_argument", `Unknown direction '${direction}'.`);
+			const amount = Math.min(1, Math.max(0, asNumber(args.amount) ?? 0.12));
+			if (amount === 0) return ok({ changed: false, note: "An amount of 0 is not a move." });
+			const focusX = Math.min(1, Math.max(0, asNumber(args.focusX) ?? 0.5));
+			const focusY = Math.min(1, Math.max(0, asNumber(args.focusY) ?? 0.5));
+
+			const zooming = direction === "in" || direction === "out";
+			// A pan needs the picture oversized, or it slides its own edge into
+			// frame and shows background — the move would read as a glitch.
+			const headroom = zooming ? 1 + amount : 1 + Math.max(amount, 0.08);
+			const startScale = direction === "out" ? headroom : 1;
+			const endScale = direction === "out" ? 1 : headroom;
+			const pan = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }[direction] ?? [
+				0, 0,
+			];
+			// Normalized canvas units: 0.5 is the centre, so a full-frame travel
+			// is 1.0 and `amount` reads as a fraction of the frame.
+			const startX = zooming ? 0.5 : 0.5 - (pan[0] * amount) / 2;
+			const startY = zooming ? 0.5 : 0.5 - (pan[1] * amount) / 2;
+			const endX = zooming ? 0.5 + (focusX - 0.5) * amount : 0.5 + (pan[0] * amount) / 2;
+			const endY = zooming ? 0.5 + (focusY - 0.5) * amount : 0.5 + (pan[1] * amount) / 2;
+
+			return mutate(
+				"Ken Burns",
+				(t) =>
+					mapClips(t, clipIds, (clip) => {
+						const last = Math.max(1, clip.endFrame - clip.startFrame - 1);
+						return {
+							...clip,
+							// Scale is oversized for the whole move, so the clip
+							// never shows its own edge mid-travel.
+							transform: { ...clip.transform },
+							keyframes: {
+								...clip.keyframes,
+								// Replaced, not merged: two competing moves on one
+								// clip is not a move anybody asked for.
+								scale: [
+									{
+										frame: 0,
+										values: [startScale, startScale],
+										interp: "smooth",
+									},
+									{ frame: last, values: [endScale, endScale], interp: "smooth" },
+								],
+								position: [
+									{ frame: 0, values: [startX, startY], interp: "smooth" },
+									{ frame: last, values: [endX, endY], interp: "smooth" },
+								],
+							},
+						};
+					}),
+				() => ({
+					animated: clipIds.length,
+					direction,
+					amount,
+					note: `Scale runs ${startScale.toFixed(2)}→${endScale.toFixed(2)} with a smooth ease. Any position or scale keyframes these clips had were replaced.`,
+				}),
+			);
+		},
+
+		crop_clips(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			if (args.reset === true) {
+				return mutate(
+					"Reset crop",
+					(t) => setClipCrop(t, clipIds, { top: 0, right: 0, bottom: 0, left: 0 }),
+					() => ({ reset: clipIds.length }),
+				);
+			}
+
+			const patch: Record<string, number> = {};
+			for (const side of ["top", "right", "bottom", "left"] as const) {
+				const value = asNumber(args[side]);
+				if (value === null) continue;
+				if (value < 0 || value >= 1)
+					return fail("invalid_argument", `${side} must be 0 or more and less than 1.`);
+				patch[side] = value;
+			}
+			if (Object.keys(patch).length === 0)
+				return fail("invalid_argument", "Pass at least one of top, right, bottom, left.");
+
+			// Merged against each clip's existing crop, so a call setting only
+			// `top` cannot be validated against zero for the other three.
+			for (const id of clipIds) {
+				const clip = findClip(timeline, id);
+				if (!clip) continue;
+				const merged = { ...clip.crop, ...patch };
+				if (merged.left + merged.right >= 1)
+					return fail(
+						"invalid_argument",
+						`On '${clip.name}' left + right would be ${(merged.left + merged.right).toFixed(2)}, leaving no picture.`,
+					);
+				if (merged.top + merged.bottom >= 1)
+					return fail(
+						"invalid_argument",
+						`On '${clip.name}' top + bottom would be ${(merged.top + merged.bottom).toFixed(2)}, leaving no picture.`,
+					);
+			}
+
+			return mutate(
+				"Crop clips",
+				(t) => setClipCrop(t, clipIds, patch),
+				() => ({
+					cropped: clipIds.length,
+					applied: patch,
+					note: "The remaining picture keeps its size and position — use apply_layout or a transform to fill the frame.",
+				}),
+			);
+		},
+
+		add_motion_preset(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+			const preset = asString(args.preset);
+			if (!preset || !["slide", "pop", "fade", "drift"].includes(preset))
+				return fail("invalid_argument", "preset must be slide, pop, fade, or drift.");
+			const at = asString(args.at) ?? "in";
+			if (at !== "in" && at !== "out")
+				return fail("invalid_argument", "at must be 'in' or 'out'.");
+			const edge = asString(args.from) ?? "bottom";
+			if (!["left", "right", "top", "bottom"].includes(edge))
+				return fail("invalid_argument", `Unknown edge '${edge}'.`);
+			const wanted = Math.max(1, Math.round(asNumber(args.durationFrames) ?? 12));
+
+			const offset = { left: [-0.5, 0], right: [0.5, 0], top: [0, -0.5], bottom: [0, 0.5] }[
+				edge
+			] ?? [0, 0.5];
+
+			return mutate(
+				`Motion ${preset} ${at}`,
+				(t) =>
+					mapClips(t, clipIds, (clip) => {
+						const span = clip.endFrame - clip.startFrame;
+						// Half the clip at most, so an entrance and an exit added
+						// separately can never run into each other.
+						const move = Math.max(1, Math.min(wanted, Math.floor(span / 2)));
+						const startAt = at === "in" ? 0 : Math.max(0, span - 1 - move);
+						const endAt = at === "in" ? move : Math.max(1, span - 1);
+						const restX = clip.transform.centerX;
+						const restY = clip.transform.centerY;
+						const offX = restX + offset[0];
+						const offY = restY + offset[1];
+						const next = { ...clip, keyframes: { ...clip.keyframes } };
+
+						if (preset === "slide" || preset === "drift") {
+							const travel = preset === "drift" ? 0.12 : 1;
+							const awayX = restX + offset[0] * travel;
+							const awayY = restY + offset[1] * travel;
+							next.keyframes.position =
+								at === "in"
+									? [
+											{
+												frame: startAt,
+												values: [awayX, awayY],
+												interp: "smooth",
+											},
+											{
+												frame: endAt,
+												values: [restX, restY],
+												interp: "smooth",
+											},
+										]
+									: [
+											{
+												frame: startAt,
+												values: [restX, restY],
+												interp: "smooth",
+											},
+											{
+												frame: endAt,
+												values: [awayX, awayY],
+												interp: "smooth",
+											},
+										];
+							if (preset === "slide") {
+								next.keyframes.opacity =
+									at === "in"
+										? [
+												{ frame: startAt, values: [0], interp: "linear" },
+												{
+													frame: endAt,
+													values: [clip.opacity],
+													interp: "linear",
+												},
+											]
+										: [
+												{
+													frame: startAt,
+													values: [clip.opacity],
+													interp: "linear",
+												},
+												{ frame: endAt, values: [0], interp: "linear" },
+											];
+							}
+						} else if (preset === "pop") {
+							next.keyframes.scale =
+								at === "in"
+									? [
+											{
+												frame: startAt,
+												values: [0.6, 0.6],
+												interp: "smooth",
+											},
+											{ frame: endAt, values: [1, 1], interp: "smooth" },
+										]
+									: [
+											{ frame: startAt, values: [1, 1], interp: "smooth" },
+											{ frame: endAt, values: [0.6, 0.6], interp: "smooth" },
+										];
+							next.keyframes.opacity =
+								at === "in"
+									? [
+											{ frame: startAt, values: [0], interp: "linear" },
+											{
+												frame: endAt,
+												values: [clip.opacity],
+												interp: "linear",
+											},
+										]
+									: [
+											{
+												frame: startAt,
+												values: [clip.opacity],
+												interp: "linear",
+											},
+											{ frame: endAt, values: [0], interp: "linear" },
+										];
+						} else {
+							next.keyframes.opacity =
+								at === "in"
+									? [
+											{ frame: startAt, values: [0], interp: "linear" },
+											{
+												frame: endAt,
+												values: [clip.opacity],
+												interp: "linear",
+											},
+										]
+									: [
+											{
+												frame: startAt,
+												values: [clip.opacity],
+												interp: "linear",
+											},
+											{ frame: endAt, values: [0], interp: "linear" },
+										];
+						}
+						// unused when the offsets are zero, but kept honest
+						void offX;
+						void offY;
+						return next;
+					}),
+				() => ({
+					animated: clipIds.length,
+					preset,
+					at,
+					...(preset === "slide" || preset === "drift" ? { from: edge } : {}),
+					note: "The move is clamped to half the clip, so an entrance and an exit never overlap.",
+				}),
+			);
+		},
+
+		async auto_color(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+			const strength = Math.min(1, Math.max(0, asNumber(args.strength) ?? 1));
+
+			const referenceId = asString(args.referenceClipId);
+			let reference: ReturnType<typeof measureScopes> | null = null;
+			if (referenceId) {
+				if (!findClip(timeline, referenceId))
+					return fail("unknown_clip", `No clip '${referenceId}'.`);
+				const measured = await scopesForClip(referenceId);
+				if (!measured.ok) return fail("render_failed", measured.reason);
+				reference = measured.scopes;
+			}
+
+			const applied: Array<Record<string, unknown>> = [];
+			const patches = new Map<string, Partial<ClipModel["color"]>>();
+			for (const id of clipIds) {
+				if (id === referenceId) continue;
+				const clip = findClip(timeline, id);
+				if (!clip) continue;
+				const measured = await scopesForClip(id);
+				if (!measured.ok) {
+					applied.push({
+						clipId: id,
+						name: clip.name,
+						corrected: false,
+						reason: measured.reason,
+					});
+					continue;
+				}
+				const target = reference ?? NEUTRAL_SCOPES;
+				const gap = compareScopes(measured.scopes, target);
+				if (!worthCorrecting(gap)) {
+					applied.push({
+						clipId: id,
+						name: clip.name,
+						corrected: false,
+						reason: referenceId
+							? "Already matches the reference closely enough that a grade would not be visible."
+							: "Already close enough to neutral that a grade would not be visible.",
+					});
+					continue;
+				}
+				const wanted = correctionFor(gap, {
+					exposure: clip.color.exposure,
+					contrast: clip.color.contrast,
+					saturation: clip.color.saturation,
+					temperature: clip.color.temperature,
+					tint: clip.color.tint,
+				});
+				// Strength interpolates from where the clip is now, so 0.5 really
+				// is half the correction rather than half the absolute value.
+				const mix = (from: number, to: number) =>
+					Number((from + (to - from) * strength).toFixed(3));
+				const patch = {
+					exposure: mix(clip.color.exposure, wanted.exposure),
+					contrast: mix(clip.color.contrast, wanted.contrast),
+					saturation: mix(clip.color.saturation, wanted.saturation),
+					temperature: Math.round(mix(clip.color.temperature, wanted.temperature)),
+					tint: mix(clip.color.tint, wanted.tint),
+				};
+				patches.set(id, patch);
+				applied.push({ clipId: id, name: clip.name, corrected: true, ...patch });
+			}
+
+			if (patches.size === 0)
+				return ok({
+					changed: false,
+					clips: applied,
+					note: "Nothing needed correcting. worthCorrecting refuses a grade too small to see rather than reporting a change nobody can perceive.",
+				});
+
+			return mutate(
+				"Auto colour",
+				(t) => {
+					let next = t;
+					for (const [id, patch] of patches) next = setClipColor(next, [id], patch);
+					return next;
+				},
+				() => ({
+					corrected: patches.size,
+					toward: referenceId ? findClip(timeline, referenceId)?.name : "neutral",
+					strength,
+					clips: applied,
+					note: "apply_color adjusts from here.",
+				}),
+			);
+		},
+
+		async apply_lut(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			if (args.remove === true) {
+				return mutate(
+					"Remove LUT",
+					(t) =>
+						mapClips(t, clipIds, (clip) => {
+							const { lut, lutAmount, ...rest } = clip.color;
+							void lut;
+							void lutAmount;
+							return { ...clip, color: rest as ClipModel["color"] };
+						}),
+					() => ({
+						removed: clipIds.length,
+						note: "The rest of the grade is untouched.",
+					}),
+				);
+			}
+
+			const path = asString(args.path);
+			const inline = asString(args.lutText);
+			if ((path === null) === (inline === null))
+				return fail("invalid_argument", "Pass exactly one of path or lutText.");
+
+			let text = inline ?? "";
+			if (path) {
+				const bridge =
+					typeof window === "undefined" ? undefined : window.electronAPI?.readLut;
+				if (!bridge)
+					return fail(
+						"unavailable",
+						"This build can't read files from disk. Pass the LUT's contents as lutText instead.",
+					);
+				const read = await bridge(path);
+				if (!read.ok) return fail("read_failed", read.reason);
+				text = read.text;
+			}
+
+			let lut: ReturnType<typeof parseCubeLut>;
+			try {
+				lut = parseCubeLut(text);
+			} catch (error) {
+				// A malformed cube renders as garbage rather than failing, so the
+				// parse error is the only chance to say what is wrong.
+				return fail(
+					"invalid_lut",
+					error instanceof LutParseError
+						? error.message
+						: `That file isn't a readable .cube LUT: ${String(error)}`,
+				);
+			}
+			const amount = Math.min(1, Math.max(0, asNumber(args.amount) ?? 1));
+
+			return mutate(
+				"Apply LUT",
+				(t) => setClipColor(t, clipIds, { lut, lutAmount: amount }),
+				() => ({
+					graded: clipIds.length,
+					size: lut.size,
+					amount,
+					...(path ? { from: path } : {}),
+					note: "The LUT runs after exposure and contrast, so the other knobs still apply.",
+				}),
+			);
+		},
+
+		reset_grade(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+			const alsoEffects = args.includeEffects === true;
+
+			return mutate(
+				"Reset grade",
+				(t) =>
+					mapClips(t, clipIds, (clip) => ({
+						...clip,
+						// Rebuilt from defaults rather than patched, so curves,
+						// balance, hue curves and the LUT go too — patching the
+						// numeric knobs would leave those silently applied.
+						color: { ...withDefaults({ ...clip, color: undefined as never }).color },
+						...(alsoEffects ? { effects: [] } : {}),
+					})),
+				() => ({
+					reset: clipIds.length,
+					includedEffects: alsoEffects,
+					note: "Curves, colour balance, hue curves and any LUT were cleared too.",
+				}),
+			);
+		},
+
+		async check_color_consistency(args) {
+			const asked = stringList(args.clipIds);
+			const tolerance = Math.max(0, asNumber(args.tolerance) ?? 0.08);
+			const candidates = timeline.tracks
+				.flatMap((track) => track.clips)
+				.filter(
+					(clip) =>
+						(clip.mediaType === "video" || clip.mediaType === "image") &&
+						(asked.length === 0 || asked.includes(clip.id)),
+				);
+			if (asked.length) {
+				const missing = asked.filter((id) => !findClip(timeline, id));
+				if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+			}
+			if (candidates.length < 2)
+				return fail(
+					"not_enough_clips",
+					"Consistency needs at least two picture clips to compare.",
+				);
+
+			const measured: Array<{ clip: ClipModel; scopes: ReturnType<typeof measureScopes> }> =
+				[];
+			const unreadable: Array<Record<string, unknown>> = [];
+			for (const clip of candidates) {
+				const result = await scopesForClip(clip.id);
+				if (result.ok) measured.push({ clip, scopes: result.scopes });
+				else unreadable.push({ clipId: clip.id, name: clip.name, reason: result.reason });
+			}
+			if (measured.length < 2)
+				return fail(
+					"not_enough_clips",
+					`Only ${measured.length} clip(s) could be measured. ${unreadable.map((row) => row.reason).join(" ")}`,
+				);
+
+			// The median rather than the mean: one badly wrong clip would drag a
+			// mean toward itself and make the good clips look like the outliers.
+			const median = (values: number[]) => {
+				const sorted = [...values].sort((a, b) => a - b);
+				return sorted[Math.floor(sorted.length / 2)];
+			};
+			const pick = (read: (scopes: Scopes) => number) =>
+				median(measured.map((entry) => read(entry.scopes)));
+			const middle: Scopes = {
+				...measured[0].scopes,
+				meanLuma: pick((s) => s.meanLuma),
+				blackPoint: pick((s) => s.blackPoint),
+				whitePoint: pick((s) => s.whitePoint),
+				saturation: pick((s) => s.saturation),
+				warmCool: pick((s) => s.warmCool),
+				greenMagenta: pick((s) => s.greenMagenta),
+				mean: {
+					r: pick((s) => s.mean.r),
+					g: pick((s) => s.mean.g),
+					b: pick((s) => s.mean.b),
+				},
+			};
+
+			const rows = measured
+				.map(({ clip, scopes }) => {
+					const gap = compareScopes(scopes, middle);
+					return {
+						clipId: clip.id,
+						name: clip.name,
+						distance: Number(sceneDistance(gap).toFixed(3)),
+						exposureGap: Number(gap.exposure.toFixed(3)),
+						contrastGap: Number(gap.contrast.toFixed(3)),
+						saturationGap: Number(gap.saturation.toFixed(3)),
+						warmCoolGap: Number(gap.warmCool.toFixed(3)),
+						outlier: sceneDistance(gap) > tolerance,
+					};
+				})
+				.sort((a, b) => b.distance - a.distance);
+
+			const outliers = rows.filter((row) => row.outlier);
+			return ok({
+				clips: rows,
+				outliers: outliers.length,
+				tolerance,
+				...(unreadable.length ? { notMeasured: unreadable } : {}),
+				note: outliers.length
+					? `${outliers.map((row) => row.name).join(", ")} sit furthest from the middle. auto_color with referenceClipId set to one of the matching clips will bring them in.`
+					: "Every clip sits within tolerance of the middle.",
 			});
 		},
 	};

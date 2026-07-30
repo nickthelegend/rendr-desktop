@@ -618,6 +618,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	/** Samples from the run that just ended, for a recorder with no file path. */
 	// Local speech. `install` is the one-click setup: it downloads the model if
 	// this machine has never had it, and reports progress while it does.
+	readLut: (path: string) => ipcRenderer.invoke("rendr-lut:read", path),
 	voiceStatus: () => ipcRenderer.invoke("rendr-voice:status"),
 	installVoice: () => ipcRenderer.invoke("rendr-voice:install"),
 	onVoiceProgress: (callback: (ratio: number) => void) => {

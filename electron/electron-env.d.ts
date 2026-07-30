@@ -252,6 +252,10 @@ interface Window {
 		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
 		onRecordBarState?: (callback: (state: unknown) => void) => () => void;
 		sendRecordBarCommand?: (command: string) => void;
+		/** Reads a .cube LUT. Refuses anything else — see electron/ipc/lut.ts. */
+		readLut?: (
+			path: string,
+		) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>;
 		voiceStatus?: () => Promise<{
 			installed: boolean;
 			installing: boolean;

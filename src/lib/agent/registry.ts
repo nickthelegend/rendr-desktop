@@ -97,6 +97,14 @@ export const DECLARED_TOOLS = [
 	"add_freeze_frame",
 	"find_scene_changes",
 	"measure_audio",
+	// Motion and colour
+	"add_ken_burns",
+	"crop_clips",
+	"add_motion_preset",
+	"auto_color",
+	"apply_lut",
+	"reset_grade",
+	"check_color_consistency",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */
@@ -143,6 +151,12 @@ const EDIT_TOOLS_BLOCKED_WHILE_RECORDING = new Set([
 	"copy_clip_style",
 	"apply_look",
 	"add_freeze_frame",
+	"add_ken_burns",
+	"crop_clips",
+	"add_motion_preset",
+	"auto_color",
+	"apply_lut",
+	"reset_grade",
 ]);
 
 /**
