@@ -330,3 +330,62 @@ export function cursorFill(style: CursorStyle): { fill: string; stroke: string }
 	if (style === "dot") return { fill: "#FFFFFF", stroke: "rgba(0,0,0,0.45)" };
 	return { fill: "#FFFFFF", stroke: "#000000" };
 }
+
+/** The raw, unsmoothed pointer position at a time — where the hardware was. */
+export function rawCursorAt(
+	telemetry: readonly CursorTelemetryPoint[],
+	timeMs: number,
+): { cx: number; cy: number } | null {
+	const sample = sampleAt(telemetry, timeMs);
+	return sample ? { cx: sample.cx, cy: sample.cy } : null;
+}
+
+export interface PointerPatch {
+	/** Where to copy pixels from, in source pixels. */
+	from: { x: number; y: number };
+	/** The region to paint over — the captured pointer — in source pixels. */
+	rect: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * Where to paint over the captured hardware pointer, and what to fill it with.
+ *
+ * macOS burns the real pointer into the capture no matter what the constraint
+ * asks (verified against raw frames on both capture paths), so the take always
+ * carries a small arrow at the raw telemetry position — visibly separated from
+ * the drawn cursor whenever the pointer moves, because the drawn one is
+ * smoothed and trails it. The fix is here, at composite time: copy a
+ * neighbouring block of the same frame over the arrow. On a screen recording
+ * the pixels beside a pointer are almost always the same flat surface it is
+ * crossing, and the drawn cursor lands on much of the region anyway.
+ */
+export function capturedPointerPatch(
+	point: { cx: number; cy: number },
+	naturalW: number,
+	naturalH: number,
+	src: { sx: number; sy: number; sw: number; sh: number },
+): PointerPatch | null {
+	if (naturalW <= 0 || naturalH <= 0 || src.sw <= 0 || src.sh <= 0) return null;
+
+	// The macOS arrow is ~17×24 points with its hotspot at the top-left; the
+	// telemetry point is that hotspot. Sized from the capture width so a retina
+	// take masks the same physical region, plus padding for the drop shadow.
+	const w = Math.max(20, naturalW * 0.012) + 8;
+	const h = w * 1.35;
+	let x = point.cx * naturalW - 4;
+	let y = point.cy * naturalH - 4;
+
+	// Outside the visible crop there is nothing on screen to hide.
+	if (x + w < src.sx || x > src.sx + src.sw || y + h < src.sy || y > src.sy + src.sh) {
+		return null;
+	}
+
+	// Clamp the mask inside the visible source rect.
+	x = Math.max(src.sx, Math.min(x, src.sx + src.sw - w));
+	y = Math.max(src.sy, Math.min(y, src.sy + src.sh - h));
+
+	// Fill from the left neighbour; from the right when parked at the left edge.
+	const gap = w + 6;
+	const fromX = x - gap >= src.sx ? x - gap : Math.min(x + gap, src.sx + src.sw - w);
+	return { from: { x: fromX, y }, rect: { x, y, w, h } };
+}

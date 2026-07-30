@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { CursorTelemetryPoint } from "@/components/video-editor/types";
-import { CURSOR_STYLES, cursorPath, DEFAULT_CURSOR, resolveCursor } from "./cursor";
+import {
+	CURSOR_STYLES,
+	capturedPointerPatch,
+	cursorPath,
+	DEFAULT_CURSOR,
+	rawCursorAt,
+	resolveCursor,
+} from "./cursor";
 
 /** A straight left-to-right drag, sampled every 20ms. */
 function travel(): CursorTelemetryPoint[] {
@@ -155,5 +162,60 @@ describe("DEFAULT_CURSOR", () => {
 		expect(DEFAULT_CURSOR.motionBlur).toBe(0);
 		expect(DEFAULT_CURSOR.clickBounce).toBe(3.5);
 		expect(DEFAULT_CURSOR.bounceSpeed).toBe(350);
+	});
+});
+
+describe("masking the captured hardware pointer", () => {
+	const full = { sx: 0, sy: 0, sw: 1920, sh: 1080 };
+
+	it("covers the pointer with padding for its shadow", () => {
+		const patch = capturedPointerPatch({ cx: 0.5, cy: 0.5 }, 1920, 1080, full);
+		expect(patch).not.toBeNull();
+		if (!patch) return;
+		expect(patch.rect.x).toBeLessThanOrEqual(960);
+		expect(patch.rect.y).toBeLessThanOrEqual(540);
+		expect(patch.rect.x + patch.rect.w).toBeGreaterThan(960 + 17);
+		expect(patch.rect.y + patch.rect.h).toBeGreaterThan(540 + 24);
+	});
+
+	it("fills from the left neighbour, and from the right at the left edge", () => {
+		const middle = capturedPointerPatch({ cx: 0.5, cy: 0.5 }, 1920, 1080, full);
+		expect(middle && middle.from.x).toBeLessThan(960);
+		// Parked at the left edge there is nothing to the left to copy.
+		const edge = capturedPointerPatch({ cx: 0.001, cy: 0.5 }, 1920, 1080, full);
+		expect(edge && edge.from.x).toBeGreaterThan(edge ? edge.rect.x : 0);
+	});
+
+	it("stays inside the visible crop at every corner", () => {
+		for (const [cx, cy] of [
+			[0, 0],
+			[1, 0],
+			[0, 1],
+			[1, 1],
+		] as const) {
+			const patch = capturedPointerPatch({ cx, cy }, 1920, 1080, full);
+			expect(patch).not.toBeNull();
+			if (!patch) continue;
+			expect(patch.rect.x).toBeGreaterThanOrEqual(0);
+			expect(patch.rect.y).toBeGreaterThanOrEqual(0);
+			expect(patch.rect.x + patch.rect.w).toBeLessThanOrEqual(1920);
+			expect(patch.rect.y + patch.rect.h).toBeLessThanOrEqual(1080);
+		}
+	});
+
+	it("returns nothing when the pointer is cropped out of frame", () => {
+		const rightHalf = { sx: 960, sy: 0, sw: 960, sh: 1080 };
+		expect(capturedPointerPatch({ cx: 0.2, cy: 0.5 }, 1920, 1080, rightHalf)).toBeNull();
+	});
+
+	it("reads the raw, unsmoothed position, clamped to the take", () => {
+		const telemetry = [
+			{ timeMs: 0, cx: 0.2, cy: 0.2, interactionType: "move" as const },
+			{ timeMs: 100, cx: 0.4, cy: 0.4, interactionType: "move" as const },
+		];
+		expect(rawCursorAt(telemetry, 50)?.cx).toBeCloseTo(0.3, 5);
+		// Beyond the samples the hardware pointer sat where it last was.
+		expect(rawCursorAt(telemetry, 900)?.cx).toBeCloseTo(0.4, 5);
+		expect(rawCursorAt([], 10)).toBeNull();
 	});
 });
