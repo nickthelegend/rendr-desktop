@@ -177,3 +177,95 @@ export function autoZoomRegions(
 
 	return regions;
 }
+
+export interface DeadAir {
+	/** Source ms before anything happens. */
+	headMs: number;
+	/** Source ms after the last thing happens. */
+	tailMs: number;
+	/** What the pointer did in between, for the receipt. */
+	firstActivityMs: number;
+	lastActivityMs: number;
+}
+
+/**
+ * The dead air at each end of a take.
+ *
+ * You hit record, then reach for the browser; at the end you reach back for the
+ * stop button. Both are in the file and neither belongs in the demo.
+ *
+ * Measured from the cursor rather than from audio, because a screen recording
+ * often has no audio at all, and because a still pointer is what "nothing is
+ * happening" actually looks like on a screen. Movement below the threshold is
+ * ignored, so a hand resting on a trackpad does not count as activity.
+ */
+export function detectDeadAir(
+	telemetry: readonly CursorTelemetryPoint[],
+	totalMs: number,
+	options: { moveThreshold?: number } = {},
+): DeadAir {
+	// Total travel over the window below which nothing is happening. A resting
+	// hand drifts a few thousandths; a real move covers tens of times that.
+	const threshold = options.moveThreshold ?? 0.03;
+	if (telemetry.length < 2 || totalMs <= 0) {
+		return { headMs: 0, tailMs: 0, firstActivityMs: 0, lastActivityMs: totalMs };
+	}
+
+	const sorted = [...telemetry].sort((a, b) => a.timeMs - b.timeMs);
+
+	/*
+	 * Displacement over a window, not between consecutive samples.
+	 *
+	 * A deliberate but unhurried move covers very little ground between two
+	 * samples 50 ms apart — well under any threshold that also rejects a hand
+	 * resting on a trackpad. Differencing neighbours therefore reads a slow
+	 * drag across the screen as stillness, which would trim the very thing the
+	 * demo is about. Summed over half a second the two are easy to tell apart.
+	 */
+	const WINDOW_MS = 500;
+	const isActivity = (index: number) => {
+		const point = sorted[index];
+		if (point.interactionType === "click" || point.interactionType === "right-click") {
+			return true;
+		}
+		let travelled = 0;
+		for (let back = index; back > 0; back--) {
+			if (point.timeMs - sorted[back - 1].timeMs > WINDOW_MS) break;
+			travelled += Math.hypot(
+				sorted[back].cx - sorted[back - 1].cx,
+				sorted[back].cy - sorted[back - 1].cy,
+			);
+		}
+		return travelled > threshold;
+	};
+
+	let first = -1;
+	for (let index = 1; index < sorted.length; index++) {
+		if (isActivity(index)) {
+			first = sorted[index].timeMs;
+			break;
+		}
+	}
+	// Nothing ever happened: there is no dead air to trim, only a dead take.
+	if (first < 0) {
+		return { headMs: 0, tailMs: 0, firstActivityMs: 0, lastActivityMs: totalMs };
+	}
+
+	let last = first;
+	for (let index = sorted.length - 1; index >= 1; index--) {
+		if (isActivity(index)) {
+			last = sorted[index].timeMs;
+			break;
+		}
+	}
+
+	// A beat is left either side: cutting to the exact first movement lands the
+	// viewer mid-gesture, which reads as a jump rather than a start.
+	const lead = 250;
+	return {
+		headMs: Math.max(0, first - lead),
+		tailMs: Math.max(0, totalMs - Math.min(totalMs, last + lead)),
+		firstActivityMs: Math.round(first),
+		lastActivityMs: Math.round(last),
+	};
+}
