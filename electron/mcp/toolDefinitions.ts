@@ -2958,6 +2958,128 @@ export const MOTION_TOOLS: AgentTool[] = [
 	},
 ];
 
+/**
+ * Audio.
+ *
+ * Fades are the clip's own fade fields, gain is volumeDb, and the mixdown goes
+ * through renderTimelineAudio — the same path the exporter uses, so what these
+ * report is what will be heard.
+ */
+export const AUDIO_TOOLS: AgentTool[] = [
+	{
+		name: "fade_audio",
+		description:
+			"Add fades to clips and choose their shape. fadeInFrames and fadeOutFrames set the lengths; shape sets the curve — 'equalPower' is the right default for crossfading two pieces of music because a linear fade dips in the middle and sounds like a hole, while 'linear' is right for a fade to silence. Applies to audio and video clips: on picture, a fade ramps opacity, on sound it ramps gain. Setting a length to 0 clears that fade. Fades multiply any existing volume keyframes rather than replacing them.",
+		inputSchema: object(
+			{
+				clipIds: { type: "array", items: { type: "string" }, description: "Clips to fade." },
+				fadeInFrames: { type: "integer", description: "Fade-in length. 0 clears it." },
+				fadeOutFrames: { type: "integer", description: "Fade-out length. 0 clears it." },
+				shape: {
+					type: "string",
+					enum: ["linear", "equalPower", "smooth"],
+					description:
+						"Curve for both fades. Omit to leave each clip's existing shape alone.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "find_silence",
+		description:
+			"Report the silent stretches in a clip, without cutting anything. Returns each gap's start and end in both source seconds and project frames, so the frames can be handed straight to split_clips or ripple_delete_ranges. This is the read-only half of remove_silence — use it to see what would go before it goes, which matters because a threshold that is slightly too high eats the quiet start of words.",
+		inputSchema: object(
+			{
+				clipId: { type: "string", description: "Clip to analyse. Must have audio." },
+				thresholdDb: {
+					type: "number",
+					description:
+						"Anything quieter counts as silence. Default −45. Raise toward −30 for a noisy room, lower toward −55 for a quiet one.",
+				},
+				minSeconds: {
+					type: "number",
+					description:
+						"Ignore gaps shorter than this. Default 0.35, which keeps breaths and the pauses between words.",
+				},
+			},
+			["clipId"],
+		),
+	},
+	{
+		name: "set_track_volume",
+		description:
+			"Set the gain of every clip on a track in one action, or offset them all by a relative amount. volumeDb replaces each clip's gain; adjustDb adds to whatever each clip already has, which is what keeps a mix's internal balance while making the whole track quieter. −60 dB is silence and the range runs to +15. Use manage_tracks to mute a track outright; this changes level, and a muted track stays muted.",
+		inputSchema: object(
+			{
+				trackId: { type: "string", description: "Track to change." },
+				volumeDb: {
+					type: "number",
+					description: "Absolute gain for every clip, −60 to +15. Pass this or adjustDb.",
+				},
+				adjustDb: {
+					type: "number",
+					description:
+						"Relative change added to each clip's current gain. −6 halves the perceived level and keeps the balance between clips.",
+				},
+			},
+			["trackId"],
+		),
+	},
+	{
+		name: "align_to_beats",
+		description:
+			"Move clips onto the beat of a music track. Analyses the music, finds its beats and bar starts, and shifts each clip's start to the nearest one — the cut lands on the beat rather than near it. Clip durations never change, so this repositions rather than retimes. Use 'downbeat' to land on bar starts instead, which is what a montage of longer shots wants.\n\nRefuses when the tempo estimate is too weak to be worth cutting to, rather than aligning to noise: speech and ambience have no reliable beat and would produce arbitrary moves that look deliberate.",
+		inputSchema: object(
+			{
+				musicClipId: {
+					type: "string",
+					description: "The audio clip whose beat to follow. It is not moved.",
+				},
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to move onto the beat.",
+				},
+				to: {
+					type: "string",
+					enum: ["beat", "downbeat"],
+					description: "Default 'beat'. 'downbeat' uses bar starts — every fourth beat.",
+				},
+				maxShiftFrames: {
+					type: "integer",
+					description:
+						"Refuse to move a clip further than this. Default 15. Without a limit, a clip far from any beat is dragged somewhere nobody intended.",
+				},
+			},
+			["musicClipId", "clipIds"],
+		),
+	},
+	{
+		name: "mix_to_asset",
+		description:
+			"Render the timeline's audio to a single WAV in the media library. Runs the same mixdown the exporter uses — every unmuted clip, with its gain, fades, volume keyframes, ducking and denoise applied — so what lands is what an export would contain. Useful for handing a finished mix to another tool, for checking a mix without a video export, and as the input to a transcription pass. The result is a normal audio asset, ready for add_clips or inspect_media.",
+		inputSchema: object({
+			name: { type: "string", description: "Library name for the WAV. Default 'Mixdown'." },
+		}),
+	},
+	{
+		name: "check_audio_sync",
+		description:
+			"Check whether a clip and its audio have drifted apart. Measures the offset between a video clip's own audio and a separate audio clip by correlating their waveforms, and reports it in frames and milliseconds — the number to pass to nudge_clips to close it. This is the measurement half of sync_clips: it says how far out things are without moving anything, which is what you want before trusting an automatic correction.\n\nReports its confidence. A low correlation means the two recordings do not share enough sound to be aligned this way, and the offset should not be acted on.",
+		inputSchema: object(
+			{
+				referenceClipId: {
+					type: "string",
+					description: "The clip to treat as correct. Not moved.",
+				},
+				clipId: { type: "string", description: "The clip to measure against it." },
+			},
+			["referenceClipId", "clipId"],
+		),
+	},
+];
+
 /** Everything the MCP server advertises. */
 export const MCP_TOOLS: AgentTool[] = [
 	...EDITING_TOOLS,
@@ -2971,6 +3093,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...ARRANGE_TOOLS,
 	...LOOK_TOOLS,
 	...MOTION_TOOLS,
+	...AUDIO_TOOLS,
 ];
 
 export const TOOLS_BY_NAME = new Map(MCP_TOOLS.map((tool) => [tool.name, tool]));

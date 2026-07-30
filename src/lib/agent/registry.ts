@@ -105,6 +105,13 @@ export const DECLARED_TOOLS = [
 	"apply_lut",
 	"reset_grade",
 	"check_color_consistency",
+	// Audio
+	"fade_audio",
+	"find_silence",
+	"set_track_volume",
+	"align_to_beats",
+	"mix_to_asset",
+	"check_audio_sync",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */
@@ -157,6 +164,9 @@ const EDIT_TOOLS_BLOCKED_WHILE_RECORDING = new Set([
 	"auto_color",
 	"apply_lut",
 	"reset_grade",
+	"fade_audio",
+	"set_track_volume",
+	"align_to_beats",
 ]);
 
 /**

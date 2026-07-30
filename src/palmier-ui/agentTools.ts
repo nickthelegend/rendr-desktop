@@ -71,8 +71,15 @@ import {
 } from "./layout";
 import { findLook, freshLookId, type LookModel, sortLooks } from "./looks";
 import { folderChain, formatDuration, SUPPORTED_SUMMARY } from "./media";
-import { buildDuckPlan } from "./mixdown";
-import { CLIP_LIMITS, type ClipModel, clampTo, isGraded, withDefaults } from "./model";
+import { buildDuckPlan, encodeWavBytes, renderTimelineAudio } from "./mixdown";
+import {
+	CLIP_LIMITS,
+	type ClipModel,
+	clampTo,
+	type FadeInterpolation,
+	isGraded,
+	withDefaults,
+} from "./model";
 import { offlineExportSupport } from "./offlineExport";
 import { type HueCurves, type HueTarget, LutParseError, parseCubeLut } from "./pixelGrade";
 import { listSources } from "./Recording";
@@ -6305,6 +6312,338 @@ export function createAgentTools(api: EditorApi) {
 				note: outliers.length
 					? `${outliers.map((row) => row.name).join(", ")} sit furthest from the middle. auto_color with referenceClipId set to one of the matching clips will bring them in.`
 					: "Every clip sits within tolerance of the middle.",
+			});
+		},
+
+		// ── Audio ─────────────────────────────────────────────────────────
+
+		fade_audio(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			const fadeIn = asNumber(args.fadeInFrames);
+			const fadeOut = asNumber(args.fadeOutFrames);
+			const shape = asString(args.shape);
+			if (fadeIn === null && fadeOut === null && shape === null)
+				return fail(
+					"invalid_argument",
+					"Pass at least one of fadeInFrames, fadeOutFrames, or shape.",
+				);
+			if (shape !== null && !["linear", "equalPower", "smooth"].includes(shape))
+				return fail("invalid_argument", `Unknown shape '${shape}'.`);
+			if ((fadeIn ?? 0) < 0 || (fadeOut ?? 0) < 0)
+				return fail("invalid_argument", "Fade lengths cannot be negative.");
+
+			// A fade pair longer than the clip would ramp down before it finished
+			// ramping up, which is a dip rather than a fade.
+			const tooLong: string[] = [];
+			for (const id of clipIds) {
+				const clip = findClip(timeline, id);
+				if (!clip) continue;
+				const span = clip.endFrame - clip.startFrame;
+				const wantIn = fadeIn ?? clip.fadeInFrames;
+				const wantOut = fadeOut ?? clip.fadeOutFrames;
+				if (wantIn + wantOut > span) tooLong.push(`${clip.name} (${span} frames)`);
+			}
+			if (tooLong.length)
+				return fail(
+					"invalid_argument",
+					`The fades would be longer than the clip on: ${tooLong.join(", ")}. Shorten them or trim less.`,
+				);
+
+			return mutate(
+				"Fade audio",
+				(t) => {
+					let next = t;
+					if (fadeIn !== null)
+						next = setClipTiming(next, clipIds, "fadeInFrames", Math.round(fadeIn));
+					if (fadeOut !== null)
+						next = setClipTiming(next, clipIds, "fadeOutFrames", Math.round(fadeOut));
+					if (shape !== null) {
+						next = setClipFadeShape(
+							next,
+							clipIds,
+							"fadeInInterpolation",
+							shape as FadeInterpolation,
+						);
+						next = setClipFadeShape(
+							next,
+							clipIds,
+							"fadeOutInterpolation",
+							shape as FadeInterpolation,
+						);
+					}
+					return next;
+				},
+				() => ({
+					faded: clipIds.length,
+					...(fadeIn !== null ? { fadeInFrames: Math.round(fadeIn) } : {}),
+					...(fadeOut !== null ? { fadeOutFrames: Math.round(fadeOut) } : {}),
+					...(shape ? { shape } : {}),
+					note: "On picture a fade ramps opacity; on sound it ramps gain. Fades multiply existing keyframes rather than replacing them.",
+				}),
+			);
+		},
+
+		async find_silence(args) {
+			const clipId = asString(args.clipId);
+			if (!clipId) return fail("invalid_argument", "clipId is required.");
+			const clip = findClip(timeline, clipId);
+			if (!clip) return fail("unknown_clip", `No clip '${clipId}'.`);
+			const asset = state.assets.find((entry) => entry.id === clip.assetId);
+			if (!asset) return fail("no_asset", `'${clip.name}' has no media behind it.`);
+			if (asset.offline)
+				return fail("media_offline", `'${asset.name}' is offline — relink it first.`);
+
+			const decoded = await decodeAudio(asset);
+			if (!decoded) return fail("no_audio", `'${asset.name}' has no decodable audio stream.`);
+
+			const gaps = detectSilence(monoSamples(decoded), decoded.sampleRate, {
+				thresholdDb: asNumber(args.thresholdDb) ?? -45,
+				minDurationSeconds: asNumber(args.minSeconds) ?? 0.35,
+			});
+
+			// Source seconds are what the detector speaks; frames are what the
+			// editing tools take. Reporting both is what makes this actionable
+			// without the caller redoing the speed and trim arithmetic.
+			const toFrame = (seconds: number) =>
+				clip.startFrame +
+				Math.round(
+					(seconds * timeline.fps) / Math.max(0.01, clip.speed) - clip.trimStartFrame,
+				);
+			const rows = gaps
+				.map(([from, to]) => ({
+					sourceSeconds: [Number(from.toFixed(3)), Number(to.toFixed(3))],
+					frames: [toFrame(from), toFrame(to)],
+					seconds: Number((to - from).toFixed(3)),
+				}))
+				.filter((row) => row.frames[1] > clip.startFrame && row.frames[0] < clip.endFrame);
+
+			return ok({
+				clipId,
+				name: clip.name,
+				silences: rows,
+				totalSeconds: Number(rows.reduce((sum, row) => sum + row.seconds, 0).toFixed(2)),
+				note: rows.length
+					? "Nothing was cut. The frames go straight to ripple_delete_ranges or split_clips; remove_silence does it in one step."
+					: "No silence long enough at this threshold. Raise thresholdDb toward −30 for a noisy recording.",
+			});
+		},
+
+		set_track_volume(args) {
+			const trackId = asString(args.trackId);
+			if (!trackId) return fail("invalid_argument", "trackId is required.");
+			const track = timeline.tracks.find((entry) => entry.id === trackId);
+			if (!track) return fail("unknown_track", `No track '${trackId}'.`);
+			if (track.clips.length === 0)
+				return ok({ changed: false, note: `'${track.name}' has no clips on it.` });
+
+			const absolute = asNumber(args.volumeDb);
+			const relative = asNumber(args.adjustDb);
+			if ((absolute === null) === (relative === null))
+				return fail("invalid_argument", "Pass exactly one of volumeDb or adjustDb.");
+			if (absolute !== null && (absolute < -60 || absolute > 15))
+				return fail("invalid_argument", "volumeDb must be between −60 and 15.");
+
+			const clipIds = track.clips.map((clip) => clip.id);
+			const clamped: string[] = [];
+			return mutate(
+				"Set track volume",
+				(t) =>
+					mapClips(t, clipIds, (clip) => {
+						const wanted = absolute ?? clip.volumeDb + (relative ?? 0);
+						const value = Math.min(15, Math.max(-60, wanted));
+						if (value !== wanted) clamped.push(clip.name);
+						return { ...clip, volumeDb: Number(value.toFixed(2)) };
+					}),
+				() => ({
+					trackName: track.name,
+					clips: clipIds.length,
+					...(absolute !== null ? { volumeDb: absolute } : { adjustDb: relative }),
+					...(clamped.length
+						? {
+								warnings: [
+									`Clamped to the −60…+15 range on: ${[...new Set(clamped)].join(", ")}.`,
+								],
+							}
+						: {}),
+					...(track.muted
+						? { note: `'${track.name}' is still muted — manage_tracks unmutes it.` }
+						: {}),
+				}),
+			);
+		},
+
+		async align_to_beats(args) {
+			const musicId = asString(args.musicClipId);
+			if (!musicId) return fail("invalid_argument", "musicClipId is required.");
+			const music = findClip(timeline, musicId);
+			if (!music) return fail("unknown_clip", `No clip '${musicId}'.`);
+			const clipIds = stringList(args.clipIds).filter((id) => id !== musicId);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must name at least one clip to move.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			const asset = state.assets.find((entry) => entry.id === music.assetId);
+			if (!asset) return fail("no_asset", `'${music.name}' has no media behind it.`);
+			if (asset.offline)
+				return fail("media_offline", `'${asset.name}' is offline — relink it first.`);
+			const decoded = await decodeAudio(asset);
+			if (!decoded) return fail("no_audio", `'${asset.name}' has no decodable audio.`);
+
+			const analysis = detectBeats(monoSamples(decoded), decoded.sampleRate);
+			// Speech and ambience have no reliable beat; aligning to one anyway
+			// produces arbitrary moves that look deliberate.
+			if (analysis.confidence < 0.35)
+				return fail(
+					"no_beat",
+					`'${music.name}' has no clear tempo — confidence ${analysis.confidence.toFixed(2)} at ${Math.round(analysis.bpm)} BPM. Aligning to this would move clips to arbitrary frames.`,
+				);
+
+			const useDownbeats = asString(args.to) === "downbeat";
+			const grid = useDownbeats ? analysis.downbeats : analysis.beats;
+			if (grid.length === 0)
+				return fail("no_beat", `No ${useDownbeats ? "bar starts" : "beats"} were found.`);
+			const maxShift = Math.max(0, Math.round(asNumber(args.maxShiftFrames) ?? 15));
+
+			// Beat times are source seconds of the music; the music's own start
+			// on the timeline is what puts them on the project's clock.
+			const gridFrames = grid.map(
+				(seconds) => music.startFrame + Math.round(seconds * timeline.fps),
+			);
+			const moves = new Map<string, number>();
+			const skipped: Array<Record<string, unknown>> = [];
+			for (const id of clipIds) {
+				const clip = findClip(timeline, id);
+				if (!clip) continue;
+				let best = gridFrames[0];
+				for (const frame of gridFrames)
+					if (Math.abs(frame - clip.startFrame) < Math.abs(best - clip.startFrame))
+						best = frame;
+				const shift = Math.abs(best - clip.startFrame);
+				if (shift > maxShift) {
+					skipped.push({ clipId: id, name: clip.name, wouldMoveFrames: shift });
+					continue;
+				}
+				if (best !== clip.startFrame && best >= 0) moves.set(id, best);
+			}
+
+			if (moves.size === 0)
+				return ok({
+					changed: false,
+					bpm: Math.round(analysis.bpm),
+					confidence: Number(analysis.confidence.toFixed(2)),
+					...(skipped.length ? { skipped } : {}),
+					note: skipped.length
+						? `Every clip was further than ${maxShift} frames from a ${useDownbeats ? "bar start" : "beat"}. Raise maxShiftFrames to move them anyway.`
+						: "Every clip already sits on a beat.",
+				});
+
+			return mutate(
+				"Align to beats",
+				(t) => placeAt(t, moves),
+				(next) => ({
+					aligned: moves.size,
+					bpm: Math.round(analysis.bpm),
+					confidence: Number(analysis.confidence.toFixed(2)),
+					to: useDownbeats ? "downbeat" : "beat",
+					...(skipped.length ? { skipped } : {}),
+					...overlapNote(next, [...moves.keys()]),
+				}),
+			);
+		},
+
+		async mix_to_asset(args) {
+			const rendered = await renderTimelineAudio(
+				timeline,
+				state.assets,
+				computeTotalFrames(timeline),
+			);
+			if (!rendered)
+				return fail(
+					"no_audio",
+					"This timeline has nothing audible — every audio clip is muted, silent, or offline.",
+				);
+			const channels: Float32Array[] = [];
+			for (let index = 0; index < rendered.numberOfChannels; index++)
+				channels.push(rendered.getChannelData(index));
+			const bytes = encodeWavBytes(channels, rendered.sampleRate);
+			const name = asString(args.name) ?? "Mixdown";
+			const added = await api.importMedia([
+				new File([bytes as unknown as BlobPart], `${name.replace(/[^\w. -]/g, "")}.wav`, {
+					type: "audio/wav",
+				}),
+			]);
+			const asset = added[0];
+			if (!asset) return fail("failed", "The mix rendered but couldn't enter the library.");
+			return ok({
+				mediaRef: asset.id,
+				name: asset.name,
+				durationSeconds: Number(rendered.duration.toFixed(2)),
+				channels: rendered.numberOfChannels,
+				sampleRate: rendered.sampleRate,
+				note: "Rendered through the same mixdown the exporter uses, so this is what an export would contain.",
+			});
+		},
+
+		async check_audio_sync(args) {
+			const referenceId = asString(args.referenceClipId);
+			const clipId = asString(args.clipId);
+			if (!referenceId || !clipId)
+				return fail("invalid_argument", "referenceClipId and clipId are both required.");
+			if (referenceId === clipId)
+				return fail("invalid_argument", "A clip cannot be measured against itself.");
+
+			const load = async (id: string) => {
+				const clip = findClip(timeline, id);
+				if (!clip) return { ok: false as const, reason: `No clip '${id}'.` };
+				const asset = state.assets.find((entry) => entry.id === clip.assetId);
+				if (!asset) return { ok: false as const, reason: `'${clip.name}' has no media.` };
+				if (asset.offline)
+					return { ok: false as const, reason: `'${asset.name}' is offline.` };
+				const decoded = await decodeAudio(asset);
+				if (!decoded)
+					return {
+						ok: false as const,
+						reason: `'${asset.name}' has no decodable audio.`,
+					};
+				return {
+					ok: true as const,
+					clip,
+					samples: monoSamples(decoded),
+					rate: decoded.sampleRate,
+				};
+			};
+
+			const reference = await load(referenceId);
+			if (!reference.ok) return fail("no_audio", reference.reason);
+			const subject = await load(clipId);
+			if (!subject.ok) return fail("no_audio", subject.reason);
+			if (reference.rate !== subject.rate)
+				return fail(
+					"rate_mismatch",
+					`These were recorded at ${reference.rate} Hz and ${subject.rate} Hz. Correlating them would report an offset scaled by the ratio.`,
+				);
+
+			const found = findSyncOffset(reference.samples, subject.samples, reference.rate);
+			const frames = Math.round(found.offsetSeconds * timeline.fps);
+			return ok({
+				referenceClip: reference.clip.name,
+				clip: subject.clip.name,
+				offsetSeconds: Number(found.offsetSeconds.toFixed(4)),
+				offsetMs: Math.round(found.offsetSeconds * 1000),
+				offsetFrames: frames,
+				confidence: Number(found.confidence.toFixed(3)),
+				note:
+					found.confidence < 0.3
+						? `Confidence ${found.confidence.toFixed(2)} is too low to act on — these two recordings do not share enough sound to be aligned this way. Do not nudge on this number.`
+						: frames === 0
+							? "Already in sync to within a frame."
+							: `nudge_clips by ${-frames} frames on '${subject.clip.name}' closes it. Nothing was moved.`,
 			});
 		},
 	};
