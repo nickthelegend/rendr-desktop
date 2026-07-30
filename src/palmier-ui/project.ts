@@ -15,6 +15,7 @@ import { type CursorSettings, DEFAULT_CURSOR } from "./cursor";
 import type { AssetModel } from "./media";
 import type { TimelineModel } from "./reducers";
 import { DEFAULT_WEBCAM, type WebcamSettings } from "./webcam";
+import { parseWorkflows, type WorkflowModel } from "./workflow";
 import { DEFAULT_ZOOM_TIMING, type ZoomTiming } from "./zoom";
 
 export const PROJECT_VERSION = 2;
@@ -57,6 +58,8 @@ export interface ProjectFile {
 	zoomTiming?: ZoomTiming;
 	/** Notes pinned to the timeline, and the narration script. */
 	comments?: CommentModel[];
+	/** Workflow graphs saved with the project. */
+	workflows?: WorkflowModel[];
 	/**
 	 * The captured pointer path. Without it a reopened project has no cursor to
 	 * draw and no clicks for suggest_zooms to read — the recording's zoom
@@ -101,6 +104,7 @@ export function serializeProject(input: {
 	zoomTiming?: ZoomTiming;
 	cursorTelemetry?: readonly CursorTelemetryPoint[];
 	comments?: readonly CommentModel[];
+	workflows?: readonly WorkflowModel[];
 }): ProjectFile {
 	return {
 		version: PROJECT_VERSION,
@@ -114,6 +118,7 @@ export function serializeProject(input: {
 		...(input.background ? { background: input.background } : {}),
 		...(input.zoomTiming ? { zoomTiming: input.zoomTiming } : {}),
 		...(input.comments?.length ? { comments: [...input.comments] } : {}),
+		...(input.workflows?.length ? { workflows: [...input.workflows] } : {}),
 		...(input.cursorTelemetry?.length ? { cursorTelemetry: [...input.cursorTelemetry] } : {}),
 	};
 }
@@ -166,6 +171,7 @@ export function parseProject(text: string): ProjectFile {
 		// Parsed rather than trusted: a malformed note is dropped, not thrown on,
 		// so one bad entry can't cost the user the whole project.
 		...(candidate.comments ? { comments: parseComments(candidate.comments) } : {}),
+		...(candidate.workflows ? { workflows: parseWorkflows(candidate.workflows) } : {}),
 		...(Array.isArray(candidate.cursorTelemetry)
 			? { cursorTelemetry: candidate.cursorTelemetry }
 			: {}),

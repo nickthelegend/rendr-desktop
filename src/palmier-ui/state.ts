@@ -24,6 +24,7 @@ import {
 } from "./captions";
 import { type CommentModel, type CommentSeed, createComment, sortComments } from "./comments";
 import { DEFAULT_VOICE, planNarration, speakToAsset } from "./voice";
+import type { WorkflowModel } from "./workflow";
 
 /** One track holds every narration line, reused across runs. */
 const NARRATION_TRACK = "Narration";
@@ -210,6 +211,9 @@ export interface EditorState {
 	 * a note is not a clip and must never affect what renders.
 	 */
 	comments: CommentModel[];
+	/** Workflow graphs — an edit described rather than performed by hand. */
+	workflows: WorkflowModel[];
+	activeWorkflowId: string | null;
 	recording: RecordingState;
 	captureSources: CaptureSource[];
 	toasts: Toast[];
@@ -280,6 +284,8 @@ function initialState(): EditorState {
 		agentConnected: false,
 		cursorTelemetry: [],
 		comments: [],
+		workflows: [],
+		activeWorkflowId: null,
 		recording: {
 			phase: "idle",
 			elapsed: 0,
@@ -402,6 +408,40 @@ export function useEditorState() {
 		setState((current) => ({
 			...current,
 			comments: current.comments.filter((comment) => comment.id !== id),
+			dirty: true,
+		}));
+	}, []);
+
+	/** Replaces one workflow, keeping the rest. */
+	const updateWorkflow = useCallback(
+		(workflowId: string, change: (workflow: WorkflowModel) => WorkflowModel) => {
+			setState((current) => ({
+				...current,
+				workflows: current.workflows.map((workflow) =>
+					workflow.id === workflowId ? change(workflow) : workflow,
+				),
+				dirty: true,
+			}));
+		},
+		[],
+	);
+
+	const addWorkflow = useCallback((workflow: WorkflowModel) => {
+		setState((current) => ({
+			...current,
+			workflows: [...current.workflows, workflow],
+			activeWorkflowId: workflow.id,
+			dirty: true,
+		}));
+		return workflow;
+	}, []);
+
+	const removeWorkflow = useCallback((workflowId: string) => {
+		setState((current) => ({
+			...current,
+			workflows: current.workflows.filter((workflow) => workflow.id !== workflowId),
+			activeWorkflowId:
+				current.activeWorkflowId === workflowId ? null : current.activeWorkflowId,
 			dirty: true,
 		}));
 	}, []);
@@ -966,6 +1006,7 @@ export function useEditorState() {
 				background: state.background,
 				zoomTiming: state.zoomTiming,
 				comments: state.comments,
+				workflows: state.workflows,
 				// Without the telemetry a reopened project has no pointer to draw
 				// and no clicks for suggest_zooms to read.
 				cursorTelemetry: state.cursorTelemetry,
@@ -981,6 +1022,7 @@ export function useEditorState() {
 			state.background,
 			state.zoomTiming,
 			state.comments,
+			state.workflows,
 		],
 	);
 
@@ -1133,6 +1175,7 @@ export function useEditorState() {
 						background: file.background ?? { ...DEFAULT_BACKGROUND },
 						zoomTiming: file.zoomTiming ?? { ...DEFAULT_ZOOM_TIMING },
 						comments: file.comments ?? [],
+						workflows: file.workflows ?? [],
 						cursorTelemetry: file.cursorTelemetry ?? [],
 						selectedClipIds: [],
 						selectedZoomRegionId: null,
@@ -1404,6 +1447,7 @@ export function useEditorState() {
 			background: saved.background ?? current.background,
 			zoomTiming: saved.zoomTiming ?? current.zoomTiming,
 			comments: saved.comments ?? current.comments,
+			workflows: saved.workflows ?? current.workflows,
 			cursorTelemetry: saved.cursorTelemetry ?? current.cursorTelemetry,
 			lastAction: "Recovered autosave",
 		}));
@@ -1775,6 +1819,9 @@ export function useEditorState() {
 		addComment,
 		updateComment,
 		removeComment,
+		addWorkflow,
+		updateWorkflow,
+		removeWorkflow,
 		runNarration,
 		askFor,
 		closePrompt,

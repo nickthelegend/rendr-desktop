@@ -61,6 +61,9 @@ export const DECLARED_TOOLS = [
 	"manage_comments",
 	"setup_voice",
 	"narrate_timeline",
+	// Workflows
+	"manage_workflows",
+	"edit_workflow",
 	"set_cursor",
 	"set_webcam",
 	"set_background",

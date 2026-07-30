@@ -1947,6 +1947,74 @@ export const RECORDING_TOOLS: AgentTool[] = [
 	},
 ];
 
+export const WORKFLOW_TOOLS: AgentTool[] = [
+	{
+		name: "manage_workflows",
+		description:
+			"Workflows: a graph that describes an edit instead of performing one by hand. A timeline is where you place things; a workflow is what you run — the difference between editing one video and describing an edit that applies to any recording, repeatedly.\n\nThe case it exists for: one long screen recording in, several short vertical clips out. Doing that on a timeline is N manual edits; as a workflow it is one graph and N runs.\n\nA graph is a pipeline, not a general dataflow language: every node takes one timeline-ish input and produces one, and a node may have only one input — two would mean deciding how to merge two timelines, which is an edit rather than a wiring choice. Cycles are refused.\n\nActions: list (default), create, create_clips_preset (the short-form pipeline, ready to run), rename, delete, describe (the run order in one line, plus anything that would stop it running).",
+		inputSchema: object({
+			action: {
+				type: "string",
+				enum: ["list", "create", "create_clips_preset", "rename", "delete", "describe"],
+				description: "Default list.",
+			},
+			workflowId: { type: "string", description: "rename/delete/describe: which workflow." },
+			name: { type: "string", description: "create/create_clips_preset/rename: its name." },
+		}),
+	},
+	{
+		name: "edit_workflow",
+		description:
+			"Builds a workflow's graph: add and remove nodes, wire them, move them, and set their parameters.\n\nNode kinds — source (a recording; where every workflow starts), detect-highlights (marks the moments worth keeping, from cursor activity and speech), split-clips (cuts the take at those moments), reframe (recomposes to another aspect: 9:16 vertical, 1:1 square), auto-zoom (punch-ins from the cursor), narrate (speaks the notes with the local voice), subtitle (word-timed captions from the narration), grade (a look — curves, balance, backdrop), export (writes a file; terminal).\n\nInvalid connections are refused with the reason rather than silently dropped, because a wire that appears to exist and does nothing is the worst outcome in a visual editor.",
+		inputSchema: object(
+			{
+				workflowId: { type: "string", description: "Which workflow to edit." },
+				action: {
+					type: "string",
+					enum: [
+						"add_node",
+						"remove_node",
+						"connect",
+						"disconnect",
+						"move_node",
+						"set_params",
+					],
+				},
+				kind: {
+					type: "string",
+					enum: [
+						"source",
+						"detect-highlights",
+						"split-clips",
+						"reframe",
+						"auto-zoom",
+						"narrate",
+						"subtitle",
+						"grade",
+						"export",
+					],
+					description: "add_node: what kind of node.",
+				},
+				nodeId: {
+					type: "string",
+					description: "remove_node/move_node/set_params: which node.",
+				},
+				from: { type: "string", description: "connect: the feeding node." },
+				to: { type: "string", description: "connect: the receiving node." },
+				edgeId: { type: "string", description: "disconnect: which wire." },
+				x: { type: "number", description: "add_node/move_node: canvas position." },
+				y: { type: "number", description: "add_node/move_node: canvas position." },
+				params: {
+					type: "object",
+					description:
+						"set_params: merged onto the node's existing settings, e.g. {aspect: '9:16'} on a reframe node.",
+				},
+			},
+			["workflowId", "action"],
+		),
+	},
+];
+
 export const NARRATION_TOOLS: AgentTool[] = [
 	{
 		name: "manage_comments",
@@ -2184,6 +2252,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	MANAGE_PROJECT_TOOL,
 	...RECORDING_TOOLS,
 	...NARRATION_TOOLS,
+	...WORKFLOW_TOOLS,
 	...ZOOM_TOOLS,
 ];
 

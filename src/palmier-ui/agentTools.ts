@@ -122,6 +122,26 @@ import {
 	type WebcamPosition,
 	type WebcamSettings,
 } from "./webcam";
+import {
+	canRun,
+	clipsWorkflow,
+	connect,
+	connectionError,
+	createNode,
+	createWorkflow,
+	describeRun,
+	disconnect,
+	moveNode,
+	NODE_SPECS,
+	type NodeKind,
+	nodeLabel,
+	nodeSpec,
+	removeNode,
+	runOrder,
+	setNodeParams,
+	type WorkflowModel,
+	workflowIssues,
+} from "./workflow";
 import { cursorFocusAt, DEFAULT_ZOOM_TIMING, scaleForDepth, ZOOM_TIMING_LIMITS } from "./zoom";
 
 export interface ToolResult {
@@ -1745,6 +1765,180 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		manage_workflows(args) {
+			const action = asString(args.action) ?? "list";
+			const describe = (workflow: WorkflowModel) => ({
+				workflowId: workflow.id,
+				name: workflow.name,
+				nodes: workflow.nodes.length,
+				edges: workflow.edges.length,
+				runnable: canRun(workflow),
+			});
+
+			if (action === "list") {
+				return ok({
+					workflows: state.workflows.map(describe),
+					nodeKinds: NODE_SPECS.map((spec) => ({
+						kind: spec.kind,
+						label: spec.label,
+						summary: spec.summary,
+						takesInput: spec.inputs === 1,
+						producesOutput: spec.hasOutput,
+					})),
+					note: "A workflow describes an edit instead of performing one. create_clips_preset gives the short-form pipeline, ready to run.",
+				});
+			}
+
+			if (action === "create" || action === "create_clips_preset") {
+				const name = asString(args.name);
+				const workflow =
+					action === "create_clips_preset"
+						? clipsWorkflow(name ?? undefined)
+						: createWorkflow(name ?? "Untitled workflow");
+				api.addWorkflow(workflow);
+				return ok({
+					created: describe(workflow),
+					runOrder: (runOrder(workflow) ?? []).map((node) => nodeLabel(node)),
+					issues: workflowIssues(workflow).map((issue) => issue.message),
+				});
+			}
+
+			const workflowId = asString(args.workflowId);
+			if (!workflowId)
+				return fail("invalid_argument", `workflowId is required to ${action}.`);
+			const workflow = state.workflows.find((entry) => entry.id === workflowId);
+			if (!workflow) return fail("unknown_workflow", `No workflow '${workflowId}'.`);
+
+			if (action === "delete") {
+				api.removeWorkflow(workflowId);
+				return ok({ deleted: workflowId });
+			}
+			if (action === "rename") {
+				const name = asString(args.name);
+				if (!name) return fail("invalid_argument", "name is required to rename.");
+				api.updateWorkflow(workflowId, (current) => ({ ...current, name }));
+				return ok({ renamed: { workflowId, name } });
+			}
+			if (action === "describe") {
+				return ok({
+					...describe(workflow),
+					run: describeRun(workflow, timeline),
+					nodes: workflow.nodes.map((node) => ({
+						nodeId: node.id,
+						kind: node.kind,
+						label: nodeLabel(node),
+						params: node.params,
+						...(node.disabled ? { disabled: true } : {}),
+					})),
+					edges: workflow.edges.map((edge) => ({
+						edgeId: edge.id,
+						from: edge.from,
+						to: edge.to,
+					})),
+					issues: workflowIssues(workflow).map((issue) => issue.message),
+				});
+			}
+
+			return fail(
+				"invalid_argument",
+				`No action '${action}'. Use list, create, create_clips_preset, rename, delete, or describe.`,
+			);
+		},
+
+		edit_workflow(args) {
+			const workflowId = asString(args.workflowId);
+			if (!workflowId) return fail("invalid_argument", "workflowId is required.");
+			const workflow = state.workflows.find((entry) => entry.id === workflowId);
+			if (!workflow) return fail("unknown_workflow", `No workflow '${workflowId}'.`);
+			const action = asString(args.action);
+
+			const receipt = (next: WorkflowModel, extra: Record<string, unknown>) => {
+				api.updateWorkflow(workflowId, () => next);
+				return ok({
+					...extra,
+					nodes: next.nodes.length,
+					edges: next.edges.length,
+					runnable: canRun(next),
+					issues: workflowIssues(next).map((issue) => issue.message),
+				});
+			};
+
+			if (action === "add_node") {
+				const kind = asString(args.kind);
+				if (!kind || !nodeSpec(kind as NodeKind)) {
+					return fail(
+						"invalid_argument",
+						`No node kind '${kind}'. This build offers: ${NODE_SPECS.map((s) => s.kind).join(", ")}.`,
+					);
+				}
+				const node = createNode(
+					kind as NodeKind,
+					asNumber(args.x) ?? 40 + workflow.nodes.length * 190,
+					asNumber(args.y) ?? 120,
+				);
+				return receipt(
+					{ ...workflow, nodes: [...workflow.nodes, node] },
+					{ added: { nodeId: node.id, kind: node.kind, label: nodeLabel(node) } },
+				);
+			}
+
+			if (action === "remove_node") {
+				const nodeId = asString(args.nodeId);
+				if (!nodeId) return fail("invalid_argument", "nodeId is required.");
+				if (!workflow.nodes.some((node) => node.id === nodeId)) {
+					return fail("unknown_node", `No node '${nodeId}' in this workflow.`);
+				}
+				return receipt(removeNode(workflow, nodeId), { removed: nodeId });
+			}
+
+			if (action === "connect") {
+				const from = asString(args.from);
+				const to = asString(args.to);
+				if (!from || !to) return fail("invalid_argument", "connect needs from and to.");
+				// Refused with the reason, not silently dropped: a wire that looks
+				// connected and does nothing is the worst outcome here.
+				const problem = connectionError(workflow, from, to);
+				if (problem) return fail("invalid_connection", problem);
+				return receipt(connect(workflow, from, to), { connected: { from, to } });
+			}
+
+			if (action === "disconnect") {
+				const edgeId = asString(args.edgeId);
+				if (!edgeId) return fail("invalid_argument", "edgeId is required.");
+				if (!workflow.edges.some((edge) => edge.id === edgeId)) {
+					return fail("unknown_edge", `No wire '${edgeId}'.`);
+				}
+				return receipt(disconnect(workflow, edgeId), { disconnected: edgeId });
+			}
+
+			if (action === "move_node") {
+				const nodeId = asString(args.nodeId);
+				const x = asNumber(args.x);
+				const y = asNumber(args.y);
+				if (!nodeId || x === null || y === null) {
+					return fail("invalid_argument", "move_node needs nodeId, x and y.");
+				}
+				return receipt(moveNode(workflow, nodeId, x, y), { moved: nodeId });
+			}
+
+			if (action === "set_params") {
+				const nodeId = asString(args.nodeId);
+				if (!nodeId) return fail("invalid_argument", "nodeId is required.");
+				const params = args.params;
+				if (!params || typeof params !== "object") {
+					return fail("invalid_argument", "params must be an object.");
+				}
+				return receipt(setNodeParams(workflow, nodeId, params as Record<string, unknown>), {
+					updated: nodeId,
+				});
+			}
+
+			return fail(
+				"invalid_argument",
+				`No action '${action}'. Use add_node, remove_node, connect, disconnect, move_node, or set_params.`,
+			);
 		},
 
 		get_recording_status() {

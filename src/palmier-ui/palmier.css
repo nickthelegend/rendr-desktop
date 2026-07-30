@@ -1166,6 +1166,52 @@
 	flex-direction: column;
 }
 
+/* What the agent is being asked about. Sits directly above the composer so the
+   link between clicking a clip and typing "this" is visible. */
+.pmr-agent__selection {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px;
+	padding: 6px 8px 0;
+}
+
+.pmr-agent__selection-label {
+	font-size: 9px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--pmr-text-muted);
+	margin-right: 2px;
+}
+
+.pmr-agent__chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	max-width: 190px;
+	padding: 2px 7px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--pmr-text);
+	font-size: 10px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.pmr-agent__chip:hover {
+	border-color: var(--pmr-accent);
+}
+
+.pmr-agent__chip-kind {
+	color: var(--pmr-accent);
+	font-size: 9px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
 .pmr-agent__field {
 	border: none;
 	background: transparent;
