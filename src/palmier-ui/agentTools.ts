@@ -69,6 +69,7 @@ import {
 	slotNames,
 	slotsFor,
 } from "./layout";
+import { findLook, freshLookId, type LookModel, sortLooks } from "./looks";
 import { folderChain, formatDuration, SUPPORTED_SUMMARY } from "./media";
 import { buildDuckPlan } from "./mixdown";
 import { CLIP_LIMITS, type ClipModel, clampTo, isGraded, withDefaults } from "./model";
@@ -318,6 +319,26 @@ function gapsOf(clips: readonly ClipModel[], end: number): Array<[number, number
 	}
 	if (cursor < end) gaps.push([cursor, end]);
 	return gaps;
+}
+
+/**
+ * How different two sampled frames are, as one 0–1 number.
+ *
+ * compareScopes answers "which knob would close this gap", which is the right
+ * shape for grading and the wrong one for cut detection. A cut needs a single
+ * magnitude, so the channels are combined — exposure and contrast dominate
+ * because a hard cut nearly always moves them, while a colour-only shift is
+ * usually a lighting change within one shot rather than a new one.
+ */
+function sceneDistance(gap: ReturnType<typeof compareScopes>): number {
+	const chroma = Math.hypot(gap.warmCool, gap.greenMagenta);
+	return Math.min(
+		1,
+		Math.abs(gap.exposure) * 1.6 +
+			Math.abs(gap.contrast) * 1.2 +
+			Math.abs(gap.saturation) * 0.6 +
+			chroma * 0.4,
+	);
 }
 
 /** `clipIds`-style arguments, filtered to the strings that are actually there. */
@@ -5296,6 +5317,371 @@ export function createAgentTools(api: EditorApi) {
 						}
 					: {}),
 			}));
+		},
+
+		// ── Looks, stills, and measurement ────────────────────────────────
+
+		save_look(args) {
+			const name = asString(args.name)?.trim();
+			if (!name) return fail("invalid_argument", "name is required.");
+			const clipId = asString(args.clipId);
+			if (!clipId) return fail("invalid_argument", "clipId is required.");
+			const clip = findClip(timeline, clipId);
+			if (!clip) return fail("unknown_clip", `No clip '${clipId}'.`);
+
+			const replacing = findLook(state.looks, name);
+			const look = api.saveLook({
+				id: freshLookId(),
+				name,
+				grade: structuredClone(clip.color),
+				createdAt: new Date().toISOString(),
+				sourceClip: clip.name,
+			});
+			return ok({
+				lookId: look.id,
+				name: look.name,
+				from: clip.name,
+				graded: isGraded(clip.color),
+				...(replacing ? { replaced: replacing.id } : {}),
+				note: isGraded(clip.color)
+					? "Saved with the project. apply_look puts it on other clips."
+					: "Saved, but this clip has no grade on it — the look is neutral and applying it will clear a target's grade.",
+			});
+		},
+
+		apply_look(args) {
+			const wanted = asString(args.look);
+			if (!wanted) return fail("invalid_argument", "look is required.");
+			const look = findLook(state.looks, wanted);
+			if (!look)
+				return fail(
+					"unknown_look",
+					state.looks.length
+						? `No look '${wanted}'. Saved: ${state.looks.map((entry) => entry.name).join(", ")}.`
+						: `No look '${wanted}' — nothing is saved yet. Use save_look first.`,
+				);
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length === 0)
+				return fail("invalid_argument", "clipIds must be a non-empty array.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			// Replaces rather than merges: a look half-applied over a leftover
+			// grade is not the look, and is not reproducible from its name.
+			return mutate(
+				`Apply look ${look.name}`,
+				(t) =>
+					mapClips(t, clipIds, (clip) => ({
+						...clip,
+						color: structuredClone(look.grade),
+					})),
+				() => ({
+					look: look.name,
+					graded: clipIds.length,
+					note: "The whole grade was replaced. apply_color adjusts from here.",
+				}),
+			);
+		},
+
+		manage_looks(args) {
+			const action = asString(args.action) ?? "list";
+			const describe = (look: LookModel) => ({
+				id: look.id,
+				name: look.name,
+				...(look.createdAt ? { savedAt: look.createdAt } : {}),
+				...(look.sourceClip ? { from: look.sourceClip } : {}),
+			});
+
+			if (action === "list") {
+				return ok({
+					looks: sortLooks(state.looks).map(describe),
+					note: state.looks.length
+						? "apply_look takes a name or an id."
+						: "Nothing saved yet — save_look stores a clip's grade under a name.",
+				});
+			}
+
+			const wanted = asString(args.look);
+			if (!wanted) return fail("invalid_argument", `look is required for '${action}'.`);
+			const look = findLook(state.looks, wanted);
+			if (!look) return fail("unknown_look", `No look '${wanted}'.`);
+
+			if (action === "delete") {
+				api.removeLook(look.id);
+				return ok({
+					deleted: look.name,
+					remaining: state.looks.length - 1,
+					note: "Clips graded with it keep their grade — applying a look copies values onto the clip.",
+				});
+			}
+			if (action === "rename") {
+				const name = asString(args.name)?.trim();
+				if (!name) return fail("invalid_argument", "name is required for a rename.");
+				const clash = findLook(state.looks, name);
+				if (clash && clash.id !== look.id)
+					return fail(
+						"name_taken",
+						`'${name}' is already a look. Delete it first, or pick another name.`,
+					);
+				api.renameLook(look.id, name);
+				return ok({ renamed: look.name, to: name });
+			}
+			return fail("invalid_argument", `Unknown action '${action}'.`);
+		},
+
+		async add_freeze_frame(args) {
+			const frame = asNumber(args.frame);
+			if (frame === null) return fail("invalid_argument", "frame is required.");
+			const at = Math.max(0, Math.round(frame));
+			const hold = Math.max(1, Math.round(asNumber(args.durationFrames) ?? 30));
+
+			const requested = asString(args.trackId);
+			// Topmost video track by default: a still inserted under the take
+			// would be saved, inserted, and invisible.
+			const track = requested
+				? timeline.tracks.find((entry) => entry.id === requested)
+				: [...timeline.tracks].reverse().find((entry) => entry.kind === "video");
+			if (!track)
+				return fail(
+					requested ? "unknown_track" : "no_video_track",
+					requested ? `No track '${requested}'.` : "This timeline has no video track.",
+				);
+			if (track.kind !== "video")
+				return fail("wrong_track_type", `'${track.name}' is not a video track.`);
+
+			const rendered = await renderFrameToCanvas(
+				timeline,
+				state.assets,
+				at,
+				undefined,
+				overlays(),
+			);
+			if (!rendered?.canvas)
+				return fail("render_failed", `Frame ${at} couldn't be rendered.`);
+			const blob = await canvasToPngBlob(rendered.canvas);
+			if (!blob) return fail("render_failed", "The frame rendered but couldn't be encoded.");
+
+			const added = await api.importMedia([
+				new File([blob], `Freeze ${at}.png`, { type: "image/png" }),
+			]);
+			const asset = added[0];
+			if (!asset)
+				return fail("failed", "The frame was rendered but couldn't enter the library.");
+
+			// Ripple first so the still lands in space that is actually empty;
+			// inserting then rippling would push the still along with everything
+			// else and leave it somewhere other than the frame asked for.
+			return mutate(
+				"Add freeze frame",
+				(t) => {
+					// A clip spanning the freeze point has to be cut, or the
+					// still is laid over footage that keeps playing underneath
+					// and the picture never actually holds. Splitting first is
+					// what makes the ripple land in real empty space.
+					const split = splitAt(t, at);
+					// Everything pauses, not just this track: the still is a
+					// composite of every track, so leaving the others running
+					// would desync picture from sound for the length of the hold.
+					const shifted = rippleShift(split, at, hold);
+					return {
+						...shifted,
+						tracks: shifted.tracks.map((entry) =>
+							entry.id !== track.id
+								? entry
+								: {
+										...entry,
+										clips: [
+											...entry.clips,
+											withDefaults({
+												id: `freeze-${asset.id}-${at}`,
+												name: `Freeze ${at}`,
+												mediaType: "image",
+												assetId: asset.id,
+												startFrame: at,
+												endFrame: at + hold,
+											}),
+										].sort((a, b) => a.startFrame - b.startFrame),
+									},
+						),
+					};
+				},
+				() => ({
+					mediaRef: asset.id,
+					frame: at,
+					durationFrames: hold,
+					trackId: track.id,
+					note: `Any clip crossing frame ${at} was split, and everything from there moved ${hold} frames later on every track, so picture and sound stay together. The still has the zoom, colour, text, and captions of that frame baked in.`,
+				}),
+			);
+		},
+
+		async find_scene_changes(args) {
+			const end = computeTotalFrames(timeline);
+			const from = Math.max(0, Math.round(asNumber(args.startFrame) ?? 0));
+			const to = Math.min(end, Math.round(asNumber(args.endFrame) ?? end));
+			const step = Math.max(1, Math.round(asNumber(args.stepFrames) ?? 5));
+			const threshold = Math.min(1, Math.max(0, asNumber(args.threshold) ?? 0.18));
+			const includeZooms = args.includeZoomRegions === true;
+			if (to <= from) return fail("invalid_argument", "endFrame must be after startFrame.");
+
+			const samples = Math.floor((to - from) / step);
+			if (samples > 400)
+				return fail(
+					"too_many_frames",
+					`That range needs ${samples} full composites at step ${step}. Raise stepFrames or narrow the range — 400 is the ceiling.`,
+				);
+
+			// A punch-in produces the same delta as a cut, so zoomed spans are
+			// excluded unless asked for; otherwise every zoom reads as an edit.
+			const zoomed: Array<[number, number]> = [];
+			if (!includeZooms) {
+				for (const track of timeline.tracks) {
+					for (const clip of track.clips) {
+						for (const region of clip.zoomRegions ?? []) {
+							const base = clip.startFrame;
+							zoomed.push([
+								base + Math.floor((region.startMs / 1000) * timeline.fps) - step,
+								base + Math.ceil((region.endMs / 1000) * timeline.fps) + step,
+							]);
+						}
+					}
+				}
+			}
+			const inZoom = (frame: number) =>
+				zoomed.some(([start, stop]) => frame >= start && frame <= stop);
+
+			const changes: Array<Record<string, unknown>> = [];
+			let previous: ReturnType<typeof measureScopes> | null = null;
+			let previousFrame = from;
+			let skipped = 0;
+			for (let frame = from; frame < to; frame += step) {
+				const rendered = await renderFrameToCanvas(
+					timeline,
+					state.assets,
+					frame,
+					undefined,
+					overlays(),
+				);
+				if (!rendered?.canvas) continue;
+				const context = rendered.canvas.getContext("2d");
+				if (!context) continue;
+				const scopes = measureScopes(
+					context.getImageData(0, 0, rendered.canvas.width, rendered.canvas.height).data,
+				);
+				if (previous) {
+					const delta = sceneDistance(compareScopes(previous, scopes));
+					if (delta >= threshold) {
+						if (inZoom(frame)) skipped += 1;
+						else
+							changes.push({
+								frame,
+								seconds: Number((frame / timeline.fps).toFixed(3)),
+								difference: Number(delta.toFixed(3)),
+								afterFrame: previousFrame,
+							});
+					}
+				}
+				previous = scopes;
+				previousFrame = frame;
+			}
+
+			return ok({
+				changes,
+				sampled: samples,
+				stepFrames: step,
+				threshold,
+				...(skipped
+					? {
+							note: `${skipped} change(s) inside zoom regions were excluded — a punch-in looks exactly like a cut. Pass includeZoomRegions to see them.`,
+						}
+					: {}),
+				hint: changes.length
+					? "Pass these frames to split_clips to cut on them."
+					: "Nothing crossed the threshold. Lower it, or reduce stepFrames.",
+			});
+		},
+
+		async measure_audio(args) {
+			const target = asNumber(args.targetDb) ?? -16;
+			const asked = stringList(args.clipIds);
+			const audible = timeline.tracks
+				.flatMap((track) => track.clips.map((clip) => ({ track, clip })))
+				.filter(
+					({ track, clip }) =>
+						(clip.mediaType === "audio" || clip.mediaType === "video") &&
+						!track.muted &&
+						(asked.length === 0 || asked.includes(clip.id)),
+				);
+			if (asked.length) {
+				const missing = asked.filter((id) => !findClip(timeline, id));
+				if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+			}
+			if (audible.length === 0)
+				return ok({
+					clips: [],
+					note: "Nothing to measure — no unmuted audio or video clips matched.",
+				});
+
+			const rows: Array<Record<string, unknown>> = [];
+			for (const { track, clip } of audible) {
+				const asset = state.assets.find((entry) => entry.id === clip.assetId);
+				if (!asset || asset.offline) {
+					rows.push({
+						clipId: clip.id,
+						name: clip.name,
+						measured: false,
+						reason: asset
+							? "Media is offline — relink the file to measure it."
+							: "This clip has no asset.",
+					});
+					continue;
+				}
+				const decoded = await decodeAudio(asset);
+				if (!decoded) {
+					rows.push({
+						clipId: clip.id,
+						name: clip.name,
+						measured: false,
+						reason: "No decodable audio stream.",
+					});
+					continue;
+				}
+				const samples = monoSamples(decoded);
+				const loudness = measureLoudness(samples, decoded.sampleRate);
+				const suggestion = normalizationGainDb(loudness, target);
+				rows.push({
+					clipId: clip.id,
+					name: clip.name,
+					trackName: track.name,
+					programDb: Number(loudness.programDb.toFixed(1)),
+					peakDbfs: Number(loudness.peakDb.toFixed(1)),
+					activeRatio: Number(loudness.activeRatio.toFixed(2)),
+					currentGainDb: clip.volumeDb,
+					suggestedGainDb: Number(suggestion.gainDb.toFixed(1)),
+					...(suggestion.limitedBy === "peak"
+						? {
+								limitedBy: "peak",
+								shortfallDb: Number(suggestion.shortfallDb.toFixed(1)),
+							}
+						: {}),
+					measured: true,
+				});
+			}
+
+			const measured = rows.filter((row) => row.measured);
+			const spread = measured.length
+				? Math.max(...measured.map((row) => row.programDb as number)) -
+					Math.min(...measured.map((row) => row.programDb as number))
+				: 0;
+			return ok({
+				clips: rows,
+				targetDb: target,
+				...(measured.length > 1 ? { loudnessSpreadDb: Number(spread.toFixed(1)) } : {}),
+				note:
+					spread > 6
+						? `These clips vary by ${spread.toFixed(1)} dB, which is audible as a jump between them. normalize_audio evens it out.`
+						: "Nothing was changed. normalize_audio applies the suggested gains.",
+			});
 		},
 	};
 

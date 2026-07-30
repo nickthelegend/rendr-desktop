@@ -2643,6 +2643,128 @@ export const ARRANGE_TOOLS: AgentTool[] = [
 	},
 ];
 
+/**
+ * Named grades, still frames, and read-only measurement.
+ *
+ * A look is stored beside the timelines and applied through the same
+ * setClipColor every other colour tool uses, so a look can never render
+ * differently from a grade set by hand.
+ */
+export const LOOK_TOOLS: AgentTool[] = [
+	{
+		name: "save_look",
+		description:
+			"Save a clip's colour grade under a name, so it can be applied to other clips or other projects. Stores exposure, contrast, saturation, vibrance, temperature, tint, highlights, shadows, whites, blacks, tone curves, colour balance, hue curves, and any loaded LUT. Saving a name that already exists replaces it — two looks with one name would mean every apply resolved to whichever was stored first, so the newer one would appear to save and then do nothing. Looks are saved with the project file. Nothing about the timeline changes.",
+		inputSchema: object(
+			{
+				name: {
+					type: "string",
+					description:
+						"What to call it. Matching is case- and whitespace-insensitive, so 'Warm Film' and 'warm film' are the same look.",
+				},
+				clipId: {
+					type: "string",
+					description: "Clip to take the grade from. Its own grade is unchanged.",
+				},
+			},
+			["name", "clipId"],
+		),
+	},
+	{
+		name: "apply_look",
+		description:
+			"Apply a saved look to clips. Replaces each target's whole grade with the look's, rather than merging — a half-applied look is not the look. To adjust afterwards, call apply_color, which merges. Pass the look's name or its id. Use manage_looks to see what is saved.",
+		inputSchema: object(
+			{
+				look: { type: "string", description: "Look name or id." },
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to grade.",
+				},
+			},
+			["look", "clipIds"],
+		),
+	},
+	{
+		name: "manage_looks",
+		description:
+			"List, rename, or delete saved looks. With no action, lists every look with its name, id, when it was saved, and the clip it came from. Deleting a look never changes any clip that was graded with it: applying a look copies its values onto the clip, so the grade survives the look.",
+		inputSchema: object({
+			action: {
+				type: "string",
+				enum: ["list", "rename", "delete"],
+				description: "Default 'list'.",
+			},
+			look: { type: "string", description: "Look name or id, for rename and delete." },
+			name: { type: "string", description: "The new name, for rename." },
+		}),
+	},
+	{
+		name: "add_freeze_frame",
+		description:
+			"Hold one frame on screen. Renders the composited timeline image at a frame, adds it to the media library as a PNG, and inserts it as a still of the requested length, pushing everything after it later so nothing is overwritten. This is how a freeze is done — clip speed is clamped to 0.1–8, so it cannot be reached by setting speed to zero. The still is a normal image clip afterwards: gradeable, croppable, and trimmable like any other. Because it captures the composited image, whatever zoom, colour, text, and captions were on that frame are baked in.",
+		inputSchema: object(
+			{
+				frame: {
+					type: "integer",
+					description: "Project frame to freeze. The still is inserted at this frame.",
+				},
+				durationFrames: {
+					type: "integer",
+					description: "How long to hold it. Default 30.",
+				},
+				trackId: {
+					type: "string",
+					description:
+						"Track to insert on. Defaults to the topmost video track, which is where the frozen image will actually be visible.",
+				},
+			},
+			["frame"],
+		),
+	},
+	{
+		name: "find_scene_changes",
+		description:
+			"Find cut points from the picture itself, rather than from cursor activity. Samples frames, measures each one's brightness and colour, and reports where consecutive samples differ sharply — a hard cut, a slide change, a window switching. Read-only: it suggests frames, it does not split anything. Pass the frames to split_clips to act on them.\n\nZoom punch-ins produce exactly the same frame-to-frame delta as a cut, so frames inside an existing zoom region are excluded by default; that is what stops every zoom from being reported as a scene change. Sampling is coarse by design — a step of 1 would render every frame in the project.",
+		inputSchema: object({
+			startFrame: { type: "integer", description: "Where to start. Default 0." },
+			endFrame: { type: "integer", description: "Where to stop. Default the timeline end." },
+			stepFrames: {
+				type: "integer",
+				description:
+					"Sampling interval. Default 5. Smaller finds shorter shots but renders more frames, and each frame is a full composite.",
+			},
+			threshold: {
+				type: "number",
+				description:
+					"How different two samples must be, 0–1. Default 0.18. Lower finds more, including dissolves and lighting shifts.",
+			},
+			includeZoomRegions: {
+				type: "boolean",
+				description:
+					"Report changes inside zoom regions too. Default false. Turning this on will report every punch-in as a cut.",
+			},
+		}),
+	},
+	{
+		name: "measure_audio",
+		description:
+			"Measure loudness without changing anything. Reports program level in dBFS — the average of the parts that are actually audible, ignoring silence — along with true peak, what fraction of the clip is above the silence floor, and the gain that would bring it to a target. These are the same numbers normalize_audio acts on, so this is how to see what it would do before it does it. Not LUFS: this is an unweighted program average, which tracks LUFS closely for speech but is not the broadcast measurement and should not be reported as one. A suggested gain is capped so the peak stays under −1 dBFS, and says so when the cap is what limited it.",
+		inputSchema: object({
+			clipIds: {
+				type: "array",
+				items: { type: "string" },
+				description: "Clips to measure. Omit for every audible clip on the timeline.",
+			},
+			targetDb: {
+				type: "number",
+				description: "Target program level in dBFS for the suggested gain. Default −16.",
+			},
+		}),
+	},
+];
+
 /** Everything the MCP server advertises. */
 export const MCP_TOOLS: AgentTool[] = [
 	...EDITING_TOOLS,
@@ -2654,6 +2776,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...WORKFLOW_RUN_TOOLS,
 	...ZOOM_TOOLS,
 	...ARRANGE_TOOLS,
+	...LOOK_TOOLS,
 ];
 
 export const TOOLS_BY_NAME = new Map(MCP_TOOLS.map((tool) => [tool.name, tool]));

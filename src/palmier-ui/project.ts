@@ -12,6 +12,7 @@ import type { CursorTelemetryPoint } from "@/components/video-editor/types";
 import { type BackgroundSettings, DEFAULT_BACKGROUND } from "./background";
 import { type CommentModel, parseComments } from "./comments";
 import { type CursorSettings, DEFAULT_CURSOR } from "./cursor";
+import { type LookModel, parseLooks } from "./looks";
 import type { AssetModel } from "./media";
 import type { TimelineModel } from "./reducers";
 import { DEFAULT_WEBCAM, type WebcamSettings } from "./webcam";
@@ -60,6 +61,8 @@ export interface ProjectFile {
 	comments?: CommentModel[];
 	/** Workflow graphs saved with the project. */
 	workflows?: WorkflowModel[];
+	/** Named grades. Absent in files written before looks existed. */
+	looks?: LookModel[];
 	/**
 	 * The captured pointer path. Without it a reopened project has no cursor to
 	 * draw and no clicks for suggest_zooms to read — the recording's zoom
@@ -105,6 +108,8 @@ export function serializeProject(input: {
 	cursorTelemetry?: readonly CursorTelemetryPoint[];
 	comments?: readonly CommentModel[];
 	workflows?: readonly WorkflowModel[];
+	/** Named grades. Absent in files written before looks existed. */
+	looks?: readonly LookModel[];
 }): ProjectFile {
 	return {
 		version: PROJECT_VERSION,
@@ -119,6 +124,7 @@ export function serializeProject(input: {
 		...(input.zoomTiming ? { zoomTiming: input.zoomTiming } : {}),
 		...(input.comments?.length ? { comments: [...input.comments] } : {}),
 		...(input.workflows?.length ? { workflows: [...input.workflows] } : {}),
+		...(input.looks?.length ? { looks: [...input.looks] } : {}),
 		...(input.cursorTelemetry?.length ? { cursorTelemetry: [...input.cursorTelemetry] } : {}),
 	};
 }
@@ -172,6 +178,7 @@ export function parseProject(text: string): ProjectFile {
 		// so one bad entry can't cost the user the whole project.
 		...(candidate.comments ? { comments: parseComments(candidate.comments) } : {}),
 		...(candidate.workflows ? { workflows: parseWorkflows(candidate.workflows) } : {}),
+		...(candidate.looks ? { looks: parseLooks(candidate.looks) } : {}),
 		...(Array.isArray(candidate.cursorTelemetry)
 			? { cursorTelemetry: candidate.cursorTelemetry }
 			: {}),

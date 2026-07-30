@@ -23,6 +23,7 @@ import {
 	toSrt,
 } from "./captions";
 import { type CommentModel, type CommentSeed, createComment, sortComments } from "./comments";
+import { type LookModel, parseLooks, sameName } from "./looks";
 import { DEFAULT_VOICE, planNarration, speakToAsset } from "./voice";
 import type { WorkflowModel } from "./workflow";
 
@@ -213,6 +214,11 @@ export interface EditorState {
 	comments: CommentModel[];
 	/** Workflow graphs — an edit described rather than performed by hand. */
 	workflows: WorkflowModel[];
+	/**
+	 * Named grades, kept beside the timelines rather than inside them: a look
+	 * exists to outlive the clip it was pulled from.
+	 */
+	looks: LookModel[];
 	activeWorkflowId: string | null;
 	recording: RecordingState;
 	captureSources: CaptureSource[];
@@ -285,6 +291,7 @@ function initialState(): EditorState {
 		cursorTelemetry: [],
 		comments: [],
 		workflows: [],
+		looks: [],
 		activeWorkflowId: null,
 		recording: {
 			phase: "idle",
@@ -437,6 +444,43 @@ export function useEditorState() {
 			dirty: true,
 		}));
 		return workflow;
+	}, []);
+
+	/**
+	 * Saves a look, replacing any existing one with the same name.
+	 *
+	 * Replace rather than append: two looks called "Warm" means every apply by
+	 * name resolves to whichever was stored first, so the new one would appear
+	 * to save and then do nothing.
+	 */
+	const saveLook = useCallback((look: LookModel) => {
+		setState((current) => ({
+			...current,
+			looks: [
+				...current.looks.filter(
+					(entry) => entry.id !== look.id && !sameName(entry.name, look.name),
+				),
+				look,
+			],
+			dirty: true,
+		}));
+		return look;
+	}, []);
+
+	const removeLook = useCallback((lookId: string) => {
+		setState((current) => ({
+			...current,
+			looks: current.looks.filter((look) => look.id !== lookId),
+			dirty: true,
+		}));
+	}, []);
+
+	const renameLook = useCallback((lookId: string, name: string) => {
+		setState((current) => ({
+			...current,
+			looks: current.looks.map((look) => (look.id === lookId ? { ...look, name } : look)),
+			dirty: true,
+		}));
 	}, []);
 
 	const removeWorkflow = useCallback((workflowId: string) => {
@@ -1010,6 +1054,7 @@ export function useEditorState() {
 				zoomTiming: state.zoomTiming,
 				comments: state.comments,
 				workflows: state.workflows,
+				looks: state.looks,
 				// Without the telemetry a reopened project has no pointer to draw
 				// and no clicks for suggest_zooms to read.
 				cursorTelemetry: state.cursorTelemetry,
@@ -1026,6 +1071,7 @@ export function useEditorState() {
 			state.zoomTiming,
 			state.comments,
 			state.workflows,
+			state.looks,
 		],
 	);
 
@@ -1179,6 +1225,7 @@ export function useEditorState() {
 						zoomTiming: file.zoomTiming ?? { ...DEFAULT_ZOOM_TIMING },
 						comments: file.comments ?? [],
 						workflows: file.workflows ?? [],
+						looks: parseLooks(file.looks),
 						cursorTelemetry: file.cursorTelemetry ?? [],
 						selectedClipIds: [],
 						selectedZoomRegionId: null,
@@ -1451,6 +1498,7 @@ export function useEditorState() {
 			zoomTiming: saved.zoomTiming ?? current.zoomTiming,
 			comments: saved.comments ?? current.comments,
 			workflows: saved.workflows ?? current.workflows,
+			looks: parseLooks(saved.looks).length ? parseLooks(saved.looks) : current.looks,
 			cursorTelemetry: saved.cursorTelemetry ?? current.cursorTelemetry,
 			lastAction: "Recovered autosave",
 		}));
@@ -1825,6 +1873,9 @@ export function useEditorState() {
 		addWorkflow,
 		updateWorkflow,
 		removeWorkflow,
+		saveLook,
+		removeLook,
+		renameLook,
 		runNarration,
 		askFor,
 		closePrompt,

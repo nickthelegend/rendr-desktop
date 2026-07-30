@@ -90,6 +90,13 @@ export const DECLARED_TOOLS = [
 	"distribute_clips",
 	"stagger_clips",
 	"copy_clip_style",
+	// Looks, stills, and measurement
+	"save_look",
+	"apply_look",
+	"manage_looks",
+	"add_freeze_frame",
+	"find_scene_changes",
+	"measure_audio",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */
@@ -134,6 +141,8 @@ const EDIT_TOOLS_BLOCKED_WHILE_RECORDING = new Set([
 	"distribute_clips",
 	"stagger_clips",
 	"copy_clip_style",
+	"apply_look",
+	"add_freeze_frame",
 ]);
 
 /**
