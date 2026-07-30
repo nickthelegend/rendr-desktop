@@ -1787,6 +1787,98 @@ export function createAgentTools(api: EditorApi) {
 			});
 		},
 
+		fit_to_duration(args) {
+			const seconds = asNumber(args.seconds);
+			if (seconds === null || seconds <= 0) {
+				return fail("invalid_argument", "seconds must be a positive number.");
+			}
+			const current = computeTotalFrames(timeline) / timeline.fps;
+			if (current <= 0) {
+				return fail("empty_timeline", "There is nothing on the timeline to retime.");
+			}
+
+			// Speed and duration are inverse: to halve the length, double the
+			// speed. Getting this backwards is the easy mistake here.
+			const factor = current / seconds;
+			const limits = CLIP_LIMITS.speed;
+
+			const retimable = timeline.tracks
+				.filter((track) => args.includeNarration === true || track.name !== "Narration")
+				.flatMap((track) => track.clips)
+				.filter((clip) => clip.mediaType !== "text");
+			if (retimable.length === 0) {
+				return fail("nothing_to_retime", "No clip on the timeline can be retimed.");
+			}
+
+			// Refused rather than clamped silently: landing at a different length
+			// than asked for, without saying so, is the failure this guards.
+			const wanted = retimable.map((clip) => clip.speed * factor);
+			const outOfRange = wanted.filter((speed) => speed < limits.min || speed > limits.max);
+			if (outOfRange.length > 0) {
+				const bounded = wanted.map((speed) =>
+					Math.min(limits.max, Math.max(limits.min, speed)),
+				);
+				const achievable = current / (bounded[0] / retimable[0].speed);
+				return fail(
+					"out_of_range",
+					`That needs ${factor.toFixed(2)}x, past the ${limits.min}-${limits.max}x limit. The closest this timeline can reach is about ${achievable.toFixed(1)}s. Cut something instead, or pick a length nearer that.`,
+				);
+			}
+
+			return mutate(
+				"Fit to duration",
+				(t) =>
+					retimable.reduce(
+						(acc, clip) => setClipNumber(acc, [clip.id], "speed", clip.speed * factor),
+						t,
+					),
+				(next) => {
+					const landed = computeTotalFrames(next) / next.fps;
+					/*
+					 * Anything left at its own speed still governs the length.
+					 *
+					 * Leaving narration alone is the right default, but it means
+					 * the timeline can land past the target — and a receipt
+					 * carrying two different numbers without saying why reads as
+					 * a tool that quietly missed.
+					 */
+					const missedBy = landed - seconds;
+					const heldBy =
+						Math.abs(missedBy) > 0.25 && args.includeNarration !== true
+							? "narration"
+							: null;
+					return {
+						targetSeconds: seconds,
+						actualSeconds: Number(landed.toFixed(2)),
+						factor: Number(factor.toFixed(3)),
+						retimed: retimable.length,
+						...(heldBy ? { missedTargetBy: Number(missedBy.toFixed(2)), heldBy } : {}),
+						// A list, because there can be more than one thing worth
+						// saying and a single `warning` key silently loses all
+						// but the last.
+						...(() => {
+							const warnings: string[] = [];
+							if (heldBy) {
+								warnings.push(
+									`The timeline is ${landed.toFixed(1)}s, not ${seconds}s: the narration track wasn't retimed and now runs longest. Pass includeNarration:true to retime it too — which re-pitches the voice — or shorten the script.`,
+								);
+							}
+							if (factor > 1.2) {
+								warnings.push(
+									`Picture is playing at ${factor.toFixed(2)}x. Any audio riding with it is pitched up audibly, so consider cutting instead of retiming.`,
+								);
+							}
+							return warnings.length > 0 ? { warnings } : {};
+						})(),
+						note:
+							args.includeNarration === true
+								? "Every clip took the same factor, so the rhythm of the edit survives."
+								: "Narration was left at its own speed, since re-pitching a generated voice is worse than letting it sit slightly early. Every other clip took the same factor.",
+					};
+				},
+			);
+		},
+
 		export_subtitles(args) {
 			const format = asString(args.format) === "vtt" ? "vtt" : "srt";
 			const groups = [

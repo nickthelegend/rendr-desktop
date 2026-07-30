@@ -2017,6 +2017,22 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 
 export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
+		name: "fit_to_duration",
+		description:
+			"Retimes the timeline to land on an exact length, by speeding up or slowing down every visual clip together. This is the tool for a platform limit — sixty seconds for a Short, ninety for a Reel — where the cut is right and only the total is wrong.\n\nEvery clip takes the same speed factor, so the rhythm of the edit survives; retiming one clip and not the rest would change the cut. Clip speed is limited to 0.1-8x, so a target needing more than that is refused with the closest achievable length rather than silently landing somewhere else.\n\nAudio moves with its clip and will change pitch — speech beyond about 1.2x starts to sound wrong, which is why the response says what factor was applied rather than only that it succeeded. Narration is left alone by default, since re-pitching a generated voice is worse than letting it sit slightly early. Undoable.",
+		inputSchema: object(
+			{
+				seconds: { type: "number", description: "Exact length to land on." },
+				includeNarration: {
+					type: "boolean",
+					description:
+						"Default false. true retimes narration too, which re-pitches the voice — usually worse than leaving it.",
+				},
+			},
+			["seconds"],
+		),
+	},
+	{
 		name: "export_subtitles",
 		description:
 			"Writes the timeline's captions as a subtitle file — SRT for most platforms, VTT for the web. This is what you upload alongside a demo so it is searchable and watchable muted, which is how most of a feed watches it.\n\nCues come from the caption clips as they stand, so anything edited on the timeline is in the file. Timings are taken from each clip's position, so moving a caption moves its cue.\n\nCall with no groupId to use the only group present; pass one when a project has more than one. get_transcript lists the groups. Returns the text as well as writing the file, so an agent can read back what it produced.",
