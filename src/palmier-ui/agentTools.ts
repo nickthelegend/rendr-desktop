@@ -142,6 +142,7 @@ import {
 	type WorkflowModel,
 	workflowIssues,
 } from "./workflow";
+import { runWorkflow } from "./workflowRun";
 import { cursorFocusAt, DEFAULT_ZOOM_TIMING, scaleForDepth, ZOOM_TIMING_LIMITS } from "./zoom";
 
 export interface ToolResult {
@@ -1765,6 +1766,71 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		async run_workflow(args) {
+			const workflowId = asString(args.workflowId);
+			if (!workflowId) return fail("invalid_argument", "workflowId is required.");
+			const workflow = state.workflows.find((entry) => entry.id === workflowId);
+			if (!workflow) return fail("unknown_workflow", `No workflow '${workflowId}'.`);
+
+			const blocking = workflowIssues(workflow);
+			if (blocking.length > 0) {
+				return fail(
+					"workflow_invalid",
+					`This workflow can't run yet: ${blocking.map((issue) => issue.message).join(" ")}`,
+				);
+			}
+
+			const dryRun = args.dryRun === true;
+			const report = await runWorkflow(workflow, {
+				timeline,
+				assets: state.assets,
+				comments: state.comments,
+				telemetry: state.cursorTelemetry,
+				hooks: {
+					// A dry run performs no speech and writes no file, so the
+					// hooks report success without doing the work.
+					narrate: dryRun
+						? async () => ({ spoken: state.comments.length, lines: [] })
+						: async () => {
+								const result = await api.runNarration({});
+								return { spoken: result.spoken, lines: result.lines };
+							},
+					export: dryRun
+						? async () => ({ path: "(dry run — no file written)" })
+						: async () => {
+								const jobId = await api.agentExport({});
+								return { path: `export job ${jobId}` };
+							},
+				},
+			});
+
+			if (!report.ok) {
+				return fail("workflow_failed", `${report.error} Nothing was committed.`);
+			}
+
+			const steps = report.steps.map((step) => ({ step: step.label, did: step.detail }));
+			if (dryRun) {
+				return ok({
+					dryRun: true,
+					steps,
+					note: "Nothing was committed and no file was written. Run again without dryRun to apply it.",
+				});
+			}
+
+			// Committed once, at the end: a failure part way through must leave
+			// the timeline exactly as it was.
+			return mutate(
+				`Run ${workflow.name}`,
+				() => report.timeline ?? timeline,
+				() => ({
+					ran: workflow.name,
+					steps,
+					...(report.outputPath ? { output: report.outputPath } : {}),
+					note: "Every step succeeded, so the timeline was committed as one undoable change.",
+				}),
+			);
 		},
 
 		manage_workflows(args) {

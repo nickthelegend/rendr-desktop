@@ -64,6 +64,7 @@ export const DECLARED_TOOLS = [
 	// Workflows
 	"manage_workflows",
 	"edit_workflow",
+	"run_workflow",
 	"set_cursor",
 	"set_webcam",
 	"set_background",
@@ -95,6 +96,7 @@ const EDIT_TOOLS_BLOCKED_WHILE_RECORDING = new Set([
 	"apply_effect",
 	"denoise_audio",
 	"narrate_timeline",
+	"run_workflow",
 	"undo",
 ]);
 

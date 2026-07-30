@@ -2015,6 +2015,25 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 	},
 ];
 
+export const WORKFLOW_RUN_TOOLS: AgentTool[] = [
+	{
+		name: "run_workflow",
+		description:
+			"Runs a workflow against the current timeline. Each node is a step that takes a timeline and returns one, so a run is a fold over the graph's order.\n\nAll or nothing: nothing is committed until every step has succeeded, so a failure at step five leaves the timeline exactly as it was rather than half-edited. A step that cannot do its work stops the run and says why, rather than passing the timeline through unchanged — a node that silently no-ops would make a run report success having produced nothing.\n\nThe response lists what each step actually did, and the output path when an Export ran. Undoable as one step. Check manage_workflows describe first if you want to know what would stop it before spending the time.",
+		inputSchema: object(
+			{
+				workflowId: { type: "string", description: "Which workflow to run." },
+				dryRun: {
+					type: "boolean",
+					description:
+						"Default false. true reports what each step would do and what would stop the run, without committing anything or writing a file.",
+				},
+			},
+			["workflowId"],
+		),
+	},
+];
+
 export const NARRATION_TOOLS: AgentTool[] = [
 	{
 		name: "manage_comments",
@@ -2253,6 +2272,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...RECORDING_TOOLS,
 	...NARRATION_TOOLS,
 	...WORKFLOW_TOOLS,
+	...WORKFLOW_RUN_TOOLS,
 	...ZOOM_TOOLS,
 ];
 

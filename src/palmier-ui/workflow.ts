@@ -153,15 +153,27 @@ export function nodeLabel(node: WorkflowNode): string {
 
 let counter = 0;
 
-export function createNode(kind: NodeKind, x: number, y: number): WorkflowNode {
+/**
+ * A fresh id, unique across app restarts.
+ *
+ * A bare counter resets when the renderer reloads, so a newly created workflow
+ * would take an id a saved one already had — and lookups by id then returned
+ * somebody else's graph. The random suffix is what makes the id depend on more
+ * than how many things this session happens to have made.
+ */
+function freshId(prefix: string): string {
 	counter += 1;
-	return { id: `n${counter.toString(36)}`, kind, x: Math.round(x), y: Math.round(y), params: {} };
+	const salt = Math.random().toString(36).slice(2, 8);
+	return `${prefix}${counter.toString(36)}-${salt}`;
+}
+
+export function createNode(kind: NodeKind, x: number, y: number): WorkflowNode {
+	return { id: freshId("n"), kind, x: Math.round(x), y: Math.round(y), params: {} };
 }
 
 export function createWorkflow(name: string): WorkflowModel {
-	counter += 1;
 	return {
-		id: `wf${counter.toString(36)}`,
+		id: freshId("wf"),
 		name: name.trim() || "Untitled workflow",
 		nodes: [],
 		edges: [],
@@ -216,10 +228,9 @@ function reaches(workflow: WorkflowModel, from: string, to: string): boolean {
 
 export function connect(workflow: WorkflowModel, from: string, to: string): WorkflowModel {
 	if (connectionError(workflow, from, to)) return workflow;
-	counter += 1;
 	return {
 		...workflow,
-		edges: [...workflow.edges, { id: `e${counter.toString(36)}`, from, to }],
+		edges: [...workflow.edges, { id: freshId("e"), from, to }],
 	};
 }
 

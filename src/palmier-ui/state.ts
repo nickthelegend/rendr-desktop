@@ -429,7 +429,10 @@ export function useEditorState() {
 	const addWorkflow = useCallback((workflow: WorkflowModel) => {
 		setState((current) => ({
 			...current,
-			workflows: [...current.workflows, workflow],
+			// Replace on id collision rather than appending a shadow: two
+			// workflows sharing an id means every lookup returns whichever came
+			// first, so the new one is invisible while appearing to exist.
+			workflows: [...current.workflows.filter((entry) => entry.id !== workflow.id), workflow],
 			activeWorkflowId: workflow.id,
 			dirty: true,
 		}));

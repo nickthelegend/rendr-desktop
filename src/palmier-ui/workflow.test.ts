@@ -281,3 +281,25 @@ describe("labels", () => {
 		expect(nodeLabel({ ...createNode("grade", 0, 0), label: "Warm look" })).toBe("Warm look");
 	});
 });
+
+describe("ids", () => {
+	it("does not collide across a restart", () => {
+		// A bare counter resets when the renderer reloads, so a new workflow
+		// would take an id a saved one already had — and a lookup by id then
+		// returned somebody else's graph. This is the regression that produced
+		// exactly that: a fresh preset resolved to a stale workflow.
+		const ids = new Set<string>();
+		for (let i = 0; i < 200; i++) ids.add(createWorkflow("w").id);
+		expect(ids.size).toBe(200);
+	});
+
+	it("gives nodes and wires distinct ids too", () => {
+		const nodeIds = new Set<string>();
+		for (let i = 0; i < 200; i++) nodeIds.add(createNode("grade", 0, 0).id);
+		expect(nodeIds.size).toBe(200);
+
+		const preset = clipsWorkflow();
+		expect(new Set(preset.nodes.map((n) => n.id)).size).toBe(preset.nodes.length);
+		expect(new Set(preset.edges.map((e) => e.id)).size).toBe(preset.edges.length);
+	});
+});
