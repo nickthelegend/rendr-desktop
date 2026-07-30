@@ -433,6 +433,9 @@ export function createAgentTools(api: EditorApi) {
 					type: track.kind,
 					...(track.muted ? { muted: true } : {}),
 					...(track.hidden ? { hidden: true } : {}),
+					// Reported whenever set, so a caller can tell a track is
+					// silent because of solo elsewhere rather than its own mute.
+					...(track.solo ? { solo: true } : {}),
 					...(track.solo ? { solo: true } : {}),
 					clips: rowsFor(track.clips),
 					...(track.clips.length ? { gaps: gapsOf(track.clips, end) } : {}),

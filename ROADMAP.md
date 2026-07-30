@@ -24,12 +24,6 @@ is: capture at the playhead, `insert_clips` the PNG for N frames, ripple the
 rest. **Trap:** clip speed is clamped to 0.1–8, so a freeze cannot be done by
 setting speed to 0 — it has to be a still.
 
-### `set_track_properties`
-Mute, solo, lock, height, rename. `manage_tracks` covers rename and add/remove;
-the flags exist on `TrackModel` and `setTrackFlag` already writes them.
-**Trap:** solo is not "mute the others" — `isAudible` in mixdown.ts already
-implements the real rule, so use it rather than reimplementing.
-
 ### `batch_export`
 Export several aspect/length variants in one call — the actual short-form case.
 Compose `reframe_timeline` + `fit_to_duration` + `export_project` per variant,

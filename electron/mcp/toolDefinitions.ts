@@ -811,6 +811,11 @@ export const EDITING_TOOLS: AgentTool[] = [
 							type: "boolean",
 							description: "Silence/unsilence the track's audio.",
 						},
+						solo: {
+							type: "boolean",
+							description:
+								"true toggles this track's solo. Solo is not the same as muting the others: it is an override, so clearing it restores whatever each track's own mute was and a track muted beforehand stays muted. Omit or pass false to leave it alone.",
+						},
 						hidden: {
 							type: "boolean",
 							description: "Exclude/include a video track in the render.",
