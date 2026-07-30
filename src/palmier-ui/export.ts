@@ -355,6 +355,23 @@ export async function renderFrame(
 		const boxY = (transform.centerY - transform.height / 2) * height;
 
 		context.save();
+
+		/*
+		 * A caption is drawn in canvas space, outside the zoom camera.
+		 *
+		 * The camera transform scales and offsets everything drawn under it —
+		 * which is the point for footage and wrong for a subtitle: at 1.5x a
+		 * caption at centerY 0.86 lands at y 438 of a 405px frame and is simply
+		 * off the bottom edge. That is why narration subtitles were invisible in
+		 * every zoomed take while the drawn cursor, which is *meant* to magnify
+		 * with the picture, rendered fine. Resetting to the identity also drops
+		 * the backdrop inset, which is right: an overlay belongs to the finished
+		 * frame, not to the footage sitting inside it.
+		 */
+		if (clip.captionGroupId !== undefined) {
+			context.setTransform(1, 0, 0, 1, 0, 0);
+		}
+
 		context.globalAlpha = opacity;
 		context.filter = clipFilter(clip);
 		context.translate(boxX + boxW / 2, boxY + boxH / 2);
@@ -511,8 +528,9 @@ export async function renderFrame(
 		context.restore();
 	}
 
-	// The camera inset is drawn outside the zoom transform, matching the preview:
-	// a presenter shouldn't slide off frame because the screen punched in.
+	// The camera inset. It reads the zoom's scale so the bubble can grow with a
+	// punch-in, but note it is still drawn under the camera transform, unlike
+	// captions above — worth revisiting if a presenter ever slides off frame.
 	if (webcam?.settings.show) {
 		const element = await cameraFrameFor(webcam.assets, visible, sources, frame, timeline.fps);
 		if (element) {
