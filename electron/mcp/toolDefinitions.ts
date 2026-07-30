@@ -2017,6 +2017,17 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 
 export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
+		name: "trim_dead_air",
+		description:
+			"Cuts the fumble off each end of a take — the seconds after you hit record and before you reach the browser, and the reach back for the stop button. For a screen recording this is the most common edit there is.\n\nFound from the cursor rather than from audio: a screen recording often has no audio at all, and a still pointer is what nothing-happening actually looks like on a screen. Travel is summed over half a second, so a slow deliberate drag counts as activity while a hand resting on a trackpad does not — differencing frame to frame would trim away the very thing the demo is about.\n\nA beat is left either side, because cutting to the exact first movement lands the viewer mid-gesture. Call with measureOnly to see what it would cut. Undoable.",
+		inputSchema: object({
+			measureOnly: {
+				type: "boolean",
+				description: "Report the dead air at each end and change nothing.",
+			},
+		}),
+	},
+	{
 		name: "fit_to_duration",
 		description:
 			"Retimes the timeline to land on an exact length, by speeding up or slowing down every visual clip together. This is the tool for a platform limit — sixty seconds for a Short, ninety for a Reel — where the cut is right and only the total is wrong.\n\nEvery clip takes the same speed factor, so the rhythm of the edit survives; retiming one clip and not the rest would change the cut. Clip speed is limited to 0.1-8x, so a target needing more than that is refused with the closest achievable length rather than silently landing somewhere else.\n\nAudio moves with its clip and will change pitch — speech beyond about 1.2x starts to sound wrong, which is why the response says what factor was applied rather than only that it succeeded. Narration is left alone by default, since re-pitching a generated voice is worse than letting it sit slightly early. Undoable.",

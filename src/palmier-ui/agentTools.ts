@@ -19,7 +19,7 @@ import {
 	suggestedDenoiseStrength,
 } from "./analysis";
 import { decodeAudio, monoSamples } from "./audio";
-import { autoZoomRegions } from "./autoZoom";
+import { autoZoomRegions, detectDeadAir } from "./autoZoom";
 import {
 	BACKGROUND_LIMITS,
 	type BackgroundSettings,
@@ -1785,6 +1785,67 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		trim_dead_air(args) {
+			if (state.cursorTelemetry.length === 0) {
+				return fail(
+					"no_telemetry",
+					"This take carries no cursor data, so there is no way to tell activity from stillness. Record with captureCursor:true, or trim by hand with trim_clips.",
+				);
+			}
+			const host = timeline.tracks
+				.filter((track) => track.kind === "video")
+				.flatMap((track) => track.clips)
+				.find((clip) => clip.mediaType === "video");
+			if (!host) return fail("nothing_to_trim", "There is no footage on the timeline.");
+
+			const totalMs = ((host.endFrame - host.startFrame) * host.speed * 1000) / timeline.fps;
+			const dead = detectDeadAir(state.cursorTelemetry, totalMs);
+			const headFrames = Math.round((dead.headMs / 1000) * timeline.fps);
+			const tailFrames = Math.round((dead.tailMs / 1000) * timeline.fps);
+
+			if (headFrames <= 0 && tailFrames <= 0) {
+				return ok({
+					changed: false,
+					note: "This take starts and ends busy, so there is nothing to trim.",
+				});
+			}
+
+			const report = {
+				headSeconds: Number((dead.headMs / 1000).toFixed(2)),
+				tailSeconds: Number((dead.tailMs / 1000).toFixed(2)),
+				firstActivitySeconds: Number((dead.firstActivityMs / 1000).toFixed(2)),
+				lastActivitySeconds: Number((dead.lastActivityMs / 1000).toFixed(2)),
+			};
+			if (args.measureOnly === true) {
+				return ok({ measureOnly: true, ...report, note: "Nothing was changed." });
+			}
+
+			return mutate(
+				"Trim dead air",
+				(t) => {
+					// The tail first: trimming the head moves every later frame,
+					// so a tail frame computed against the original would land in
+					// the wrong place.
+					let next = t;
+					if (tailFrames > 0) {
+						next = trimClipEnd(next, host.id, host.endFrame - tailFrames);
+					}
+					if (headFrames > 0) {
+						next = trimClipStart(next, host.id, host.startFrame + headFrames);
+					}
+					return next;
+				},
+				(next) => {
+					const clip = findClip(next, host.id);
+					return {
+						...report,
+						frames: clip ? [clip.startFrame, clip.endFrame] : [],
+						note: "A beat was left either side, so the cut doesn't land mid-gesture. The clip's other content is untouched — use ripple_delete_ranges if you want the timeline to close up.",
+					};
+				},
+			);
 		},
 
 		fit_to_duration(args) {
