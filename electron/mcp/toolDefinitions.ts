@@ -2489,6 +2489,160 @@ export const ZOOM_TOOLS: AgentTool[] = [
 	},
 ];
 
+/**
+ * Arranging clips in time.
+ *
+ * Palmier leaves this to dragging, which an agent cannot do. Every one of these
+ * is expressible as "set each clip's start frame", so they share one rule: a
+ * clip's duration never changes, only where it sits. That keeps them safe to
+ * chain — align then distribute then stagger reads as three moves, not three
+ * retimes.
+ */
+export const ARRANGE_TOOLS: AgentTool[] = [
+	{
+		name: "find_gaps",
+		description:
+			"Report every gap — stretch of a track with no clip on it — without changing anything. A gap in a video track renders as the project background, which is usually an accident left behind by remove_clips or trim_clips. Reports each gap's track, start frame, end frame, and length in frames and seconds. Leading gaps before a track's first clip are included and flagged, because a project that opens on empty background is nearly always a mistake. Use close_gaps to remove them, or move_clips to fill one deliberately.",
+		inputSchema: object({
+			trackId: {
+				type: "string",
+				description: "Restrict to one track. Omit to report every track.",
+			},
+			minFrames: {
+				type: "integer",
+				description:
+					"Ignore gaps shorter than this. Default 1. Raise it to skip single-frame rounding gaps that are not visible.",
+			},
+		}),
+	},
+	{
+		name: "close_gaps",
+		description:
+			"Pull clips left so a track runs continuously, removing every gap. This is the ripple-delete of empty space: each clip keeps its duration and its order, and only its position changes. Operates per track — closing gaps on a video track does not move its audio track, so pass both track ids (or omit trackId for all tracks) when picture and sound must stay in sync. Reports how much time each track lost. Use find_gaps first to see what would move.",
+		inputSchema: object({
+			trackId: {
+				type: "string",
+				description: "Restrict to one track. Omit to close gaps on every track.",
+			},
+			keepLeadingGap: {
+				type: "boolean",
+				description:
+					"Leave the gap before the first clip alone. Default false, which pulls the first clip to frame 0.",
+			},
+			minFrames: {
+				type: "integer",
+				description: "Only close gaps at least this long. Default 1.",
+			},
+		}),
+	},
+	{
+		name: "align_clips",
+		description:
+			"Line several clips up on one frame. edge picks what is aligned: 'start' puts every clip's first frame on the target, 'end' puts every clip's last frame there. The target is either an explicit frame, or the corresponding edge of a reference clip. Durations are unchanged, so aligning by 'end' moves clips of different lengths to different start frames. Clips on the same track can be pushed into overlap by this — that is allowed, and reported, because stacking is sometimes the point.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to move. Two or more.",
+				},
+				edge: {
+					type: "string",
+					enum: ["start", "end"],
+					description: "Which edge of each clip lands on the target. Default 'start'.",
+				},
+				frame: {
+					type: "integer",
+					description: "Explicit target frame. Pass this or referenceClipId, not both.",
+				},
+				referenceClipId: {
+					type: "string",
+					description:
+						"Align to this clip's matching edge. The reference itself never moves, and does not need to be in clipIds.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "distribute_clips",
+		description:
+			"Space clips evenly. The first and last clip stay put and everything between them is repositioned so the gaps are equal — the standard 'distribute horizontally' of a layout tool, applied to time. With spacingFrames instead, clips are laid end to end with that exact gap starting from the earliest clip, which is how a montage of equal beats is built. Durations never change. Clips are ordered by their current start frame, so the sequence you see is the sequence you get.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to space out. Three or more for even distribution.",
+				},
+				spacingFrames: {
+					type: "integer",
+					description:
+						"Exact gap between consecutive clips, measured from one clip's end to the next clip's start. 0 butts them together. Omit to spread evenly between the existing first and last clip instead.",
+				},
+			},
+			["clipIds"],
+		),
+	},
+	{
+		name: "stagger_clips",
+		description:
+			"Offset each clip progressively, so clip N starts offsetFrames later than clip N−1 relative to where it is now. Unlike distribute_clips this preserves the existing rhythm and shifts it into a cascade — the usual way to build an overlapping stack of titles or a staircase of picture-in-picture panels. A negative offset cascades the other way. Clips are ordered by current start frame; the first clip does not move.",
+		inputSchema: object(
+			{
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to cascade, two or more.",
+				},
+				offsetFrames: {
+					type: "integer",
+					description:
+						"Extra delay added per clip, cumulative. 6 at 30fps is a fifth of a second between each.",
+				},
+			},
+			["clipIds", "offsetFrames"],
+		),
+	},
+	{
+		name: "copy_clip_style",
+		description:
+			"Copy a clip's look onto other clips, without touching their timing or their media. Copies color grade, effects, opacity, blend mode, edge rounding and softness, transform, and crop — pick a subset with `include`. This is how one graded clip becomes the reference for a whole sequence. Timing, trims, speed, volume, fades, text content, and keyframes are never copied: those are per-clip by nature, and copying them is what silently destroys an edit. Text style is copied only between text clips.",
+		inputSchema: object(
+			{
+				sourceClipId: {
+					type: "string",
+					description: "The clip whose look is copied. It is not modified.",
+				},
+				targetClipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to paste the look onto.",
+				},
+				include: {
+					type: "array",
+					items: {
+						type: "string",
+						enum: [
+							"color",
+							"effects",
+							"opacity",
+							"blendMode",
+							"edges",
+							"transform",
+							"crop",
+							"textStyle",
+						],
+					},
+					description:
+						"Which parts to copy. Omit for everything except transform and crop, which are excluded by default because they carry layout that is usually per-clip.",
+				},
+			},
+			["sourceClipId", "targetClipIds"],
+		),
+	},
+];
+
 /** Everything the MCP server advertises. */
 export const MCP_TOOLS: AgentTool[] = [
 	...EDITING_TOOLS,
@@ -2499,6 +2653,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...CLIP_EDIT_TOOLS,
 	...WORKFLOW_RUN_TOOLS,
 	...ZOOM_TOOLS,
+	...ARRANGE_TOOLS,
 ];
 
 export const TOOLS_BY_NAME = new Map(MCP_TOOLS.map((tool) => [tool.name, tool]));

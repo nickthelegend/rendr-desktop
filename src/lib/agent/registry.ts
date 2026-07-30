@@ -83,6 +83,13 @@ export const DECLARED_TOOLS = [
 	"suggest_zooms",
 	"add_zoom_regions",
 	"update_zoom_regions",
+	// Arranging clips in time
+	"find_gaps",
+	"close_gaps",
+	"align_clips",
+	"distribute_clips",
+	"stagger_clips",
+	"copy_clip_style",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */
@@ -120,6 +127,13 @@ const EDIT_TOOLS_BLOCKED_WHILE_RECORDING = new Set([
 	"narrate_timeline",
 	"run_workflow",
 	"undo",
+	// Arranging clips in time
+	"find_gaps",
+	"close_gaps",
+	"align_clips",
+	"distribute_clips",
+	"stagger_clips",
+	"copy_clip_style",
 ]);
 
 /**

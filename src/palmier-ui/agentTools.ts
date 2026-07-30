@@ -84,6 +84,7 @@ import {
 	duplicateClips,
 	findClip,
 	layoutClips,
+	mapClips,
 	mergeRanges,
 	moveClip,
 	nudgeClips,
@@ -317,6 +318,62 @@ function gapsOf(clips: readonly ClipModel[], end: number): Array<[number, number
 	}
 	if (cursor < end) gaps.push([cursor, end]);
 	return gaps;
+}
+
+/** `clipIds`-style arguments, filtered to the strings that are actually there. */
+const stringList = (value: unknown): string[] =>
+	asArray(value).filter((entry): entry is string => typeof entry === "string");
+
+/**
+ * Moves clips to new start frames, keeping every duration exactly.
+ *
+ * The arranging tools all reduce to this. Duration is recomputed from the clip
+ * in hand rather than passed in, so no caller can move a clip and resize it in
+ * the same step — a bug that is invisible until an export runs long.
+ */
+export function placeAt(
+	timeline: TimelineModel,
+	starts: ReadonlyMap<string, number>,
+): TimelineModel {
+	return mapClips(timeline, [...starts.keys()], (clip) => {
+		const start = starts.get(clip.id);
+		if (start === undefined || start === clip.startFrame) return clip;
+		const span = clip.endFrame - clip.startFrame;
+		const from = Math.max(0, Math.round(start));
+		return { ...clip, startFrame: from, endFrame: from + span };
+	});
+}
+
+/**
+ * Whether moving these clips left any of them stacked on a trackmate.
+ *
+ * Overlap is legal — stacking is sometimes the point — so this reports rather
+ * than refuses. Silence would be worse: two clips on one track at one frame
+ * means one of them is not in the export, and nothing else says so.
+ */
+export function overlapNote(
+	timeline: TimelineModel,
+	movedIds: readonly string[],
+): Record<string, unknown> {
+	const moved = new Set(movedIds);
+	const collisions: string[] = [];
+	for (const track of timeline.tracks) {
+		const sorted = [...track.clips].sort((a, b) => a.startFrame - b.startFrame);
+		for (let i = 1; i < sorted.length; i++) {
+			const previous = sorted[i - 1];
+			const clip = sorted[i];
+			if (clip.startFrame >= previous.endFrame) continue;
+			if (!moved.has(clip.id) && !moved.has(previous.id)) continue;
+			collisions.push(`${previous.name} / ${clip.name}`);
+		}
+	}
+	return collisions.length
+		? {
+				warnings: [
+					`Now overlapping on the same track: ${collisions.join(", ")}. The later clip covers the earlier one.`,
+				],
+			}
+		: {};
 }
 
 export function createAgentTools(api: EditorApi) {
@@ -4913,6 +4970,332 @@ export function createAgentTools(api: EditorApi) {
 					{ type: "text", text: JSON.stringify(payload, null, 2) },
 				],
 			};
+		},
+
+		// ── Arranging clips in time ───────────────────────────────────────
+		//
+		// All five movers go through `placeAt`, so a clip's duration is
+		// structurally incapable of changing here. Only where it sits does.
+
+		find_gaps(args) {
+			const only = asString(args.trackId);
+			const min = Math.max(1, Math.round(asNumber(args.minFrames) ?? 1));
+			if (only && !timeline.tracks.some((track) => track.id === only))
+				return fail("unknown_track", `No track '${only}'.`);
+
+			const gaps: Array<Record<string, unknown>> = [];
+			for (const track of timeline.tracks) {
+				if (only && track.id !== only) continue;
+				const sorted = [...track.clips].sort((a, b) => a.startFrame - b.startFrame);
+				let cursor = 0;
+				for (const clip of sorted) {
+					if (clip.startFrame - cursor >= min) {
+						gaps.push({
+							trackId: track.id,
+							trackName: track.name,
+							startFrame: cursor,
+							endFrame: clip.startFrame,
+							frames: clip.startFrame - cursor,
+							seconds: Number(((clip.startFrame - cursor) / timeline.fps).toFixed(3)),
+							// A gap at the head is worth calling out separately: it
+							// renders as background from frame 0, which reads as a
+							// broken export rather than an edit.
+							...(cursor === 0 ? { leading: true } : {}),
+							before: clip.name,
+						});
+					}
+					cursor = Math.max(cursor, clip.endFrame);
+				}
+			}
+			return ok({
+				gaps,
+				totalGapFrames: gaps.reduce((sum, gap) => sum + (gap.frames as number), 0),
+				note: gaps.length
+					? "close_gaps removes these. Gaps render as the project background."
+					: "No gaps — every track runs continuously from frame 0.",
+			});
+		},
+
+		close_gaps(args) {
+			const only = asString(args.trackId);
+			const keepLeading = args.keepLeadingGap === true;
+			const min = Math.max(1, Math.round(asNumber(args.minFrames) ?? 1));
+			if (only && !timeline.tracks.some((track) => track.id === only))
+				return fail("unknown_track", `No track '${only}'.`);
+
+			const moves = new Map<string, number>();
+			const reclaimed: Array<Record<string, unknown>> = [];
+			for (const track of timeline.tracks) {
+				if (only && track.id !== only) continue;
+				const sorted = [...track.clips].sort((a, b) => a.startFrame - b.startFrame);
+				let cursor = 0;
+				let saved = 0;
+				for (const [index, clip] of sorted.entries()) {
+					if (index === 0 && keepLeading) {
+						cursor = clip.endFrame;
+						continue;
+					}
+					const gap = clip.startFrame - cursor;
+					if (gap >= min) {
+						saved += gap;
+						moves.set(clip.id, clip.startFrame - saved);
+					} else if (saved > 0) {
+						moves.set(clip.id, clip.startFrame - saved);
+					}
+					cursor = Math.max(cursor, clip.endFrame - saved);
+				}
+				if (saved > 0)
+					reclaimed.push({
+						trackId: track.id,
+						trackName: track.name,
+						framesRemoved: saved,
+						seconds: Number((saved / timeline.fps).toFixed(3)),
+					});
+			}
+			if (moves.size === 0)
+				return ok({ changed: false, note: "No gaps long enough to close." });
+
+			return mutate(
+				"Close gaps",
+				(t) => placeAt(t, moves),
+				() => ({
+					clipsMoved: moves.size,
+					tracks: reclaimed,
+					note: "Each track was closed independently, so picture and sound only stay in sync if both tracks were included.",
+				}),
+			);
+		},
+
+		align_clips(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length < 2)
+				return fail("invalid_argument", "clipIds needs at least two clips.");
+			const missing = clipIds.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			const edge = asString(args.edge) ?? "start";
+			if (edge !== "start" && edge !== "end")
+				return fail("invalid_argument", "edge must be 'start' or 'end'.");
+
+			const frame = asNumber(args.frame);
+			const referenceId = asString(args.referenceClipId);
+			if ((frame === null) === (referenceId === null))
+				return fail("invalid_argument", "Pass exactly one of frame or referenceClipId.");
+
+			let target: number;
+			if (referenceId !== null) {
+				const reference = findClip(timeline, referenceId);
+				if (!reference) return fail("unknown_clip", `No clip '${referenceId}'.`);
+				target = edge === "start" ? reference.startFrame : reference.endFrame;
+			} else {
+				target = Math.round(frame ?? 0);
+			}
+			if (target < 0) return fail("invalid_argument", "A clip cannot start before frame 0.");
+
+			const moves = new Map<string, number>();
+			for (const id of clipIds) {
+				if (id === referenceId) continue;
+				const clip = findClip(timeline, id);
+				if (!clip) continue;
+				const start =
+					edge === "start" ? target : target - (clip.endFrame - clip.startFrame);
+				if (start < 0)
+					return fail(
+						"invalid_argument",
+						`Aligning '${clip.name}' by its end would start it at frame ${start}, before the timeline begins. Align by 'start', or pick a later target.`,
+					);
+				moves.set(id, start);
+			}
+			if (moves.size === 0)
+				return ok({ changed: false, note: "Only the reference clip was listed." });
+
+			return mutate(
+				"Align clips",
+				(t) => placeAt(t, moves),
+				(next) => ({
+					aligned: moves.size,
+					edge,
+					atFrame: target,
+					...overlapNote(next, [...moves.keys()]),
+				}),
+			);
+		},
+
+		distribute_clips(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length < 2)
+				return fail("invalid_argument", "clipIds needs at least two clips.");
+			const clips = clipIds.map((id) => findClip(timeline, id));
+			const missing = clipIds.filter((_, index) => !clips[index]);
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			// Ordered by where they are now, so the result preserves the sequence
+			// the caller can see rather than the order they happened to type.
+			const ordered = (clips as ClipModel[])
+				.slice()
+				.sort((a, b) => a.startFrame - b.startFrame);
+			const spacing = asNumber(args.spacingFrames);
+			const moves = new Map<string, number>();
+
+			if (spacing !== null) {
+				const gap = Math.round(spacing);
+				let cursor = ordered[0].startFrame;
+				for (const clip of ordered) {
+					moves.set(clip.id, cursor);
+					cursor += clip.endFrame - clip.startFrame + gap;
+				}
+			} else {
+				if (ordered.length < 3)
+					return fail(
+						"invalid_argument",
+						"Even distribution needs three clips — the first and last are anchors. For two clips, pass spacingFrames.",
+					);
+				const first = ordered[0];
+				const last = ordered[ordered.length - 1];
+				const span = last.endFrame - first.startFrame;
+				const used = ordered.reduce(
+					(sum, clip) => sum + (clip.endFrame - clip.startFrame),
+					0,
+				);
+				const slack = span - used;
+				if (slack < 0)
+					return fail(
+						"invalid_argument",
+						`These clips total ${used} frames but only span ${span}, so they already overlap and there is nothing to distribute. Move the last clip later first.`,
+					);
+				const gap = slack / (ordered.length - 1);
+				let cursor = first.startFrame;
+				for (const clip of ordered) {
+					moves.set(clip.id, Math.round(cursor));
+					cursor += clip.endFrame - clip.startFrame + gap;
+				}
+			}
+
+			return mutate(
+				"Distribute clips",
+				(t) => placeAt(t, moves),
+				(next) => ({
+					distributed: moves.size,
+					mode: spacing !== null ? `fixed ${Math.round(spacing)}-frame gaps` : "even",
+					...overlapNote(next, [...moves.keys()]),
+				}),
+			);
+		},
+
+		stagger_clips(args) {
+			const clipIds = stringList(args.clipIds);
+			if (clipIds.length < 2)
+				return fail("invalid_argument", "clipIds needs at least two clips.");
+			const clips = clipIds.map((id) => findClip(timeline, id));
+			if (clips.some((clip) => !clip))
+				return fail(
+					"unknown_clip",
+					`No clip: ${clipIds.filter((_, i) => !clips[i]).join(", ")}.`,
+				);
+			const offset = asNumber(args.offsetFrames);
+			if (offset === null) return fail("invalid_argument", "offsetFrames is required.");
+
+			const ordered = (clips as ClipModel[])
+				.slice()
+				.sort((a, b) => a.startFrame - b.startFrame);
+			const moves = new Map<string, number>();
+			for (const [index, clip] of ordered.entries()) {
+				const start = clip.startFrame + Math.round(offset) * index;
+				if (start < 0)
+					return fail(
+						"invalid_argument",
+						`A stagger of ${Math.round(offset)} would put '${clip.name}' at frame ${start}, before the timeline begins.`,
+					);
+				if (index > 0) moves.set(clip.id, start);
+			}
+			if (moves.size === 0)
+				return ok({ changed: false, note: "An offset of 0 moves nothing." });
+
+			return mutate(
+				"Stagger clips",
+				(t) => placeAt(t, moves),
+				(next) => ({
+					staggered: moves.size,
+					offsetFrames: Math.round(offset),
+					...overlapNote(next, [...moves.keys()]),
+				}),
+			);
+		},
+
+		copy_clip_style(args) {
+			const sourceId = asString(args.sourceClipId);
+			if (!sourceId) return fail("invalid_argument", "sourceClipId is required.");
+			const source = findClip(timeline, sourceId);
+			if (!source) return fail("unknown_clip", `No clip '${sourceId}'.`);
+
+			const targets = stringList(args.targetClipIds).filter((id) => id !== sourceId);
+			if (targets.length === 0)
+				return fail("invalid_argument", "targetClipIds must name at least one other clip.");
+			const missing = targets.filter((id) => !findClip(timeline, id));
+			if (missing.length) return fail("unknown_clip", `No clip: ${missing.join(", ")}.`);
+
+			// transform and crop carry layout, which is nearly always per-clip —
+			// copying them by default would silently undo apply_layout.
+			const requested = stringList(args.include);
+			const parts = new Set(
+				requested.length
+					? requested
+					: ["color", "effects", "opacity", "blendMode", "edges", "textStyle"],
+			);
+			const unknown = [...parts].filter(
+				(part) =>
+					![
+						"color",
+						"effects",
+						"opacity",
+						"blendMode",
+						"edges",
+						"transform",
+						"crop",
+						"textStyle",
+					].includes(part),
+			);
+			if (unknown.length)
+				return fail("invalid_argument", `Unknown include: ${unknown.join(", ")}.`);
+
+			const skippedText: string[] = [];
+			const apply = (t: TimelineModel): TimelineModel =>
+				mapClips(t, targets, (clip) => {
+					const next = { ...clip };
+					if (parts.has("color")) next.color = { ...source.color };
+					if (parts.has("effects"))
+						next.effects = source.effects ? source.effects.map((e) => ({ ...e })) : [];
+					if (parts.has("opacity")) next.opacity = source.opacity;
+					if (parts.has("blendMode")) next.blendMode = source.blendMode;
+					if (parts.has("edges")) {
+						next.edgeRounding = source.edgeRounding;
+						next.edgeSoftness = source.edgeSoftness;
+					}
+					if (parts.has("transform")) next.transform = { ...source.transform };
+					if (parts.has("crop")) next.crop = { ...source.crop };
+					if (parts.has("textStyle")) {
+						// Typography on a video clip does nothing, and silently
+						// attaching it would leave a clip claiming a style it
+						// cannot render.
+						if (source.textStyle && clip.mediaType === "text")
+							next.textStyle = { ...source.textStyle };
+						else if (source.textStyle) skippedText.push(clip.name);
+					}
+					return next;
+				});
+
+			return mutate("Copy clip style", apply, () => ({
+				from: source.name,
+				styled: targets.length,
+				copied: [...parts],
+				...(skippedText.length
+					? {
+							warnings: [
+								`Text style was not copied to ${skippedText.length} non-text clip(s): ${skippedText.join(", ")}.`,
+							],
+						}
+					: {}),
+			}));
 		},
 	};
 
