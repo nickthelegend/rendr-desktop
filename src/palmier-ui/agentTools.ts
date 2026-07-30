@@ -65,6 +65,7 @@ import {
 	slotsFor,
 } from "./layout";
 import { folderChain, formatDuration, SUPPORTED_SUMMARY } from "./media";
+import { buildDuckPlan } from "./mixdown";
 import { CLIP_LIMITS, type ClipModel, clampTo, isGraded, withDefaults } from "./model";
 import { offlineExportSupport } from "./offlineExport";
 import { type HueCurves, type HueTarget, LutParseError, parseCubeLut } from "./pixelGrade";
@@ -1773,6 +1774,84 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		duck_audio(args) {
+			const amountDb = asNumber(args.amountDb) ?? -12;
+			const rampFrames = asNumber(args.rampFrames) ?? 8;
+			if (amountDb >= 0) {
+				return fail(
+					"invalid_argument",
+					"amountDb must be negative — ducking lowers a level. -12 keeps a bed audible under speech.",
+				);
+			}
+
+			// The narration track is what everything else ducks under.
+			const narration = timeline.tracks.find((track) => track.name === "Narration");
+			const spans = (narration?.clips ?? []).map((clip) => ({
+				startFrame: clip.startFrame,
+				endFrame: clip.endFrame,
+			}));
+			if (spans.length === 0) {
+				return fail(
+					"nothing_to_duck_under",
+					"There is no narration to duck under. Run narrate_timeline first, or set levels directly with set_clip_properties.",
+				);
+			}
+
+			const asked = asArray(args.clipIds).filter(
+				(value): value is string => typeof value === "string",
+			);
+			const candidates = timeline.tracks
+				.filter((track) => track.name !== "Narration")
+				.flatMap((track) => track.clips)
+				.filter((clip) => clip.mediaType !== "text")
+				.filter((clip) => (asked.length === 0 ? true : asked.includes(clip.id)));
+
+			const plans = candidates
+				.map((clip) => buildDuckPlan(clip, spans, { amountDb, rampFrames }))
+				.filter((plan): plan is NonNullable<typeof plan> => plan !== null);
+
+			if (plans.length === 0) {
+				return fail(
+					"nothing_to_duck",
+					"Nothing overlaps the narration for long enough to duck. A line has to be longer than two ramps to hold a level.",
+				);
+			}
+
+			return mutate(
+				"Duck audio",
+				(t) =>
+					plans.reduce(
+						// Replaces the volume track rather than adding to it, so
+						// running this again after re-narrating doesn't layer.
+						(acc, plan) =>
+							setClipKeyframes(
+								acc,
+								plan.clipId,
+								"volumeDb",
+								// Linear, so the ramps are straight lines rather than
+								// eased — a duck that eases in sounds like the bed
+								// is being faded by hand, which is not what it is.
+								plan.rows.map(([frame, db]) => ({
+									frame,
+									values: [db],
+									interp: "linear" as const,
+								})),
+							),
+						t,
+					),
+				() => ({
+					ducked: plans.map((plan) => ({
+						clipId: plan.clipId,
+						points: plan.rows.length,
+					})),
+					amountDb,
+					rampFrames,
+					underNarrationLines: spans.length,
+					note: "Written as volume keyframes, so it is audible while scrubbing and present in the export with no bake step.",
+				}),
+			);
 		},
 
 		add_transition(args) {

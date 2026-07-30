@@ -214,3 +214,77 @@ export function audioBufferToWav(buffer: AudioBuffer): Blob {
 	// One contiguous copy so the Blob doesn't have to reason about the view.
 	return new Blob([encodeWavBytes(channels, buffer.sampleRate)], { type: "audio/wav" });
 }
+
+export interface DuckSpan {
+	/** Timeline frames the narration occupies. */
+	startFrame: number;
+	endFrame: number;
+}
+
+export interface DuckPlan {
+	clipId: string;
+	/** volumeDb keyframe rows: [frame, db]. Clip-relative, as the model stores. */
+	rows: Array<[number, number]>;
+}
+
+/**
+ * Volume keyframes that duck a clip under narration.
+ *
+ * Written as keyframes rather than as a new audio stage because `clipGainAt`
+ * already reads them, and it feeds both playback and the export mixdown — so a
+ * duck is audible in the preview and present in the file without either path
+ * learning anything new.
+ *
+ * Each span gets four points: full level, down, down, back up. The ramps are
+ * what stop a duck sounding like a gate; without them the bed cuts out on the
+ * narrator's first syllable.
+ */
+export function buildDuckPlan(
+	clip: ClipModel,
+	spans: readonly DuckSpan[],
+	options: { amountDb?: number; rampFrames?: number } = {},
+): DuckPlan | null {
+	const amount = options.amountDb ?? -12;
+	const ramp = Math.max(1, Math.round(options.rampFrames ?? 8));
+	const base = clip.volumeDb;
+
+	// Only the parts of a span that actually overlap this clip matter, and a
+	// span shorter than two ramps cannot hold its ducked level.
+	const overlapping = spans
+		.map((span) => ({
+			startFrame: Math.max(span.startFrame, clip.startFrame),
+			endFrame: Math.min(span.endFrame, clip.endFrame),
+		}))
+		.filter((span) => span.endFrame - span.startFrame > ramp * 2)
+		.sort((a, b) => a.startFrame - b.startFrame);
+	if (overlapping.length === 0) return null;
+
+	// Merged, so two lines close together duck once and stay down between them
+	// rather than lifting for the gap and dipping again.
+	const merged: DuckSpan[] = [];
+	for (const span of overlapping) {
+		const last = merged[merged.length - 1];
+		if (last && span.startFrame - last.endFrame <= ramp * 2) {
+			last.endFrame = Math.max(last.endFrame, span.endFrame);
+			continue;
+		}
+		merged.push({ ...span });
+	}
+
+	const rows: Array<[number, number]> = [];
+	const local = (frame: number) => Math.max(0, Math.round(frame - clip.startFrame));
+	for (const span of merged) {
+		rows.push([local(span.startFrame - ramp), base]);
+		rows.push([local(span.startFrame), base + amount]);
+		rows.push([local(span.endFrame), base + amount]);
+		rows.push([local(span.endFrame + ramp), base]);
+	}
+
+	// Rows must be ordered and unique per frame, or sampling picks arbitrarily.
+	const byFrame = new Map<number, number>();
+	for (const [frame, db] of rows) byFrame.set(frame, db);
+	return {
+		clipId: clip.id,
+		rows: [...byFrame.entries()].sort((a, b) => a[0] - b[0]),
+	};
+}

@@ -2017,6 +2017,28 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 
 export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
+		name: "duck_audio",
+		description:
+			"Drops a clip's level under the narration so speech stays intelligible over it — the mix problem every voiced demo has.\n\nBy default it ducks every clip that isn't narration, under every narration clip it finds, so a whole demo is balanced in one call. Pass clipIds to duck only those.\n\nWritten as volume keyframes rather than a separate audio stage, because those already drive both playback and the export mixdown: a duck is audible while scrubbing and present in the file, with no bake step. Each line gets four points — full, down, down, back up — because ramping is what stops a duck sounding like a gate. Lines closer together than two ramps duck once and stay down between them, so the bed doesn't pump.\n\nRun it again after re-narrating: it replaces the automation rather than layering more. Undoable.",
+		inputSchema: object({
+			clipIds: {
+				type: "array",
+				items: { type: "string" },
+				description: "Clips to duck. Omit to duck everything that isn't narration.",
+			},
+			amountDb: {
+				type: "number",
+				description:
+					"How far to drop, in dB. Default -12, which keeps a bed audible under speech. -18 or lower effectively silences it.",
+			},
+			rampFrames: {
+				type: "number",
+				description:
+					"Frames to ramp over, each side. Default 8 — about a quarter second at 30fps.",
+			},
+		}),
+	},
+	{
 		name: "add_transition",
 		description:
 			"Cross-dissolves the cut between two touching clips. Pass the frame the cut is at (from get_timeline's clip boundaries) and how many frames the dissolve should run for.\n\nBuilt from fades rather than a separate effect: the incoming clip is pulled earlier so the two overlap, the outgoing one fades out across the overlap and the incoming one fades in across it. Both already render, so a dissolve behaves exactly like the fades you can set by hand.\n\nRefused, with the reason, when it cannot honestly be made — a dissolve longer than the clips it joins, or one needing source footage before the incoming clip's in point that doesn't exist. Pass removeClipId instead to restore a hard cut. Undoable.",
