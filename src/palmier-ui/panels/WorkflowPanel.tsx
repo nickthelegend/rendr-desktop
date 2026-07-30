@@ -157,8 +157,9 @@ export function WorkflowPanel({ api }: { api: EditorApi }) {
 					))}
 				</div>
 
-				{/* biome-ignore lint/a11y/noStaticElementInteractions: the canvas is a
-				    drawing surface; every actionable thing on it is a button */}
+				{/* A bare div takes the pointer here because the canvas is a drawing
+				    surface, not a control: every actionable thing on it — node, port,
+				    wire, delete — is its own button and reachable by keyboard. */}
 				<div
 					className="pmr-wf__canvas"
 					ref={surface}

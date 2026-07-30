@@ -993,7 +993,7 @@ export function useEditorState() {
 				})),
 			};
 		},
-		[addAssets, commit, state.comments],
+		[addAssets, commit, state.comments, timeline.fps],
 	);
 
 	const snapshot = useCallback(
