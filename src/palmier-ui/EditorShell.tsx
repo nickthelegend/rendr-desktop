@@ -41,6 +41,7 @@ import { InspectorPanel } from "./panels/InspectorPanel";
 import { MediaPanel } from "./panels/MediaPanel";
 import { PreviewPanel } from "./panels/PreviewPanel";
 import { TimelinePanel } from "./panels/TimelinePanel";
+import { WorkflowPanel } from "./panels/WorkflowPanel";
 import {
 	Countdown,
 	captureStream,
@@ -943,7 +944,16 @@ export function EditorShell() {
 	};
 	const timelinePane: SplitPane = {
 		key: "timeline",
-		content: wrap("timeline", <TimelinePanel api={api} onImportClick={openImport} />),
+		// A workflow replaces the timeline rather than sitting beside it: the two
+		// answer different questions, and a workflow is what produces a timeline.
+		content: wrap(
+			"timeline",
+			state.activeWorkflowId ? (
+				<WorkflowPanel api={api} />
+			) : (
+				<TimelinePanel api={api} onImportClick={openImport} />
+			),
+		),
 		size: 0.34,
 		minPx: Layout.timelineMinHeight,
 		collapsed: maximized !== null && maximized !== "timeline",

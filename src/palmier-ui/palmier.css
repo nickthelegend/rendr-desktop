@@ -510,6 +510,189 @@
 
 /* A single line of text in a dialog — the rename field. Sized to fill the row
    rather than the fixed 56px a numeric field wants. */
+/* The workflow canvas. Replaces the timeline when a workflow is open: the two
+   answer different questions and showing both would imply they compose. */
+.pmr-wf {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+.pmr-wf__palette {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	padding: 6px 8px;
+	border-bottom: 1px solid var(--pmr-border-subtle);
+}
+
+.pmr-wf__add {
+	padding: 3px 8px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: transparent;
+	color: var(--pmr-text-muted);
+	font-size: 10px;
+	cursor: pointer;
+}
+
+.pmr-wf__add:hover {
+	border-color: var(--pmr-accent);
+	color: var(--pmr-text);
+}
+
+.pmr-wf__state {
+	font-size: 10px;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-wf__state[data-ready] {
+	color: rgb(126, 200, 140);
+}
+
+.pmr-wf__canvas {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	/* A grid gives the eye something to judge alignment against while dragging. */
+	background-image: radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+	background-size: 22px 22px;
+}
+
+.pmr-wf__wires {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+	pointer-events: none;
+}
+
+.pmr-wf__wire {
+	fill: none;
+	stroke: var(--pmr-border);
+	stroke-width: 2;
+	pointer-events: stroke;
+	cursor: pointer;
+}
+
+.pmr-wf__wire:hover {
+	stroke: var(--pmr-danger, #e5484d);
+	stroke-width: 3;
+}
+
+.pmr-wf__node {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 0 10px;
+	border: 1px solid var(--pmr-border);
+	border-radius: var(--pmr-radius-sm);
+	background: var(--pmr-bg-raised);
+	cursor: grab;
+	user-select: none;
+}
+
+.pmr-wf__node[data-selected] {
+	border-color: var(--pmr-accent);
+}
+
+/* A node that would stop the run says so on its own edge, not only in the list. */
+.pmr-wf__node[data-problem] {
+	border-color: var(--pmr-danger, #e5484d);
+	border-style: dashed;
+}
+
+.pmr-wf__node[data-wiring] {
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--pmr-accent) 45%, transparent);
+}
+
+.pmr-wf__step {
+	flex: 0 0 auto;
+	min-width: 15px;
+	color: var(--pmr-text-muted);
+	font-size: 9px;
+	font-variant-numeric: tabular-nums;
+}
+
+.pmr-wf__label {
+	flex: 1;
+	font-size: 11px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pmr-wf__port {
+	position: absolute;
+	top: 50%;
+	width: 11px;
+	height: 11px;
+	margin-top: -5.5px;
+	padding: 0;
+	border: 1px solid var(--pmr-border);
+	border-radius: 50%;
+	background: var(--pmr-bg-surface);
+	cursor: crosshair;
+}
+
+.pmr-wf__port:hover {
+	border-color: var(--pmr-accent);
+	background: var(--pmr-accent);
+}
+
+.pmr-wf__port--in {
+	left: -6px;
+}
+
+.pmr-wf__port--out {
+	right: -6px;
+}
+
+.pmr-wf__kill {
+	position: absolute;
+	top: -7px;
+	right: -7px;
+	width: 15px;
+	height: 15px;
+	padding: 0;
+	border: 1px solid var(--pmr-border);
+	border-radius: 50%;
+	background: var(--pmr-bg-surface);
+	color: var(--pmr-text-muted);
+	font-size: 10px;
+	line-height: 1;
+	cursor: pointer;
+	opacity: 0;
+}
+
+.pmr-wf__node:hover .pmr-wf__kill {
+	opacity: 1;
+}
+
+.pmr-wf__kill:hover {
+	border-color: var(--pmr-danger, #e5484d);
+	color: var(--pmr-danger, #e5484d);
+}
+
+.pmr-wf__issues {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px 8px;
+	border-top: 1px solid var(--pmr-border-subtle);
+	max-height: 78px;
+	overflow-y: auto;
+}
+
+.pmr-wf__issue {
+	font-size: 10px;
+	color: var(--pmr-danger, #e5484d);
+}
+
 /* Notes pinned to the timeline. Their own colour, so a note is never mistaken
    for a clip or a zoom at a glance. */
 .pmr-note {

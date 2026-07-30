@@ -11,6 +11,7 @@ import { toFcpxml, toXmeml } from "./interchange";
 import { splitAt } from "./reducers";
 import type { EditorApi } from "./state";
 import { LAYOUT_PRESETS } from "./theme";
+import { clipsWorkflow } from "./workflow";
 
 interface MenuItem {
 	label: string;
@@ -82,6 +83,31 @@ export function MenuBar({
 						api.newProject();
 					},
 				},
+				{
+					label: "New Workflow…",
+					action: () =>
+						api.askFor({
+							title: "New workflow",
+							label: "Name",
+							initialValue: "Short-form clips",
+							confirmLabel: "Create",
+							// Created from the clips preset rather than empty: an
+							// empty canvas is a poor way to learn what the nodes do,
+							// and this is the pipeline the feature exists for.
+							onConfirm: (name) => api.addWorkflow(clipsWorkflow(name)),
+						}),
+				},
+				{
+					label: state.activeWorkflowId ? "Back to Timeline" : "Workflows…",
+					disabled: !state.activeWorkflowId && state.workflows.length === 0,
+					action: () =>
+						api.patch({
+							activeWorkflowId: state.activeWorkflowId
+								? null
+								: (state.workflows[0]?.id ?? null),
+						}),
+				},
+				{ separator: true, label: "" },
 				{ label: "Open Project…", shortcut: `${MOD}O`, action: onOpenClick },
 				{ label: "Import Media…", shortcut: `${MOD}I`, action: onImportClick },
 				{
