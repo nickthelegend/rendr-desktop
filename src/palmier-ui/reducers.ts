@@ -1198,3 +1198,108 @@ export function trimSelectionToPlayhead(
 	}
 	return next;
 }
+
+export interface TransitionResult {
+	timeline: TimelineModel;
+	/** Why it couldn't be added, when it couldn't. */
+	error?: string;
+	/** The pair it was applied between. */
+	between?: [string, string];
+	frames?: number;
+}
+
+/**
+ * Cross-dissolves the cut between two touching clips.
+ *
+ * Built from fades rather than a new primitive: the two clips are overlapped by
+ * `frames`, the outgoing one fades out across the overlap and the incoming one
+ * fades in across it. Both already render — `clipOpacityAt` honours fades — so
+ * a dissolve is composed of behaviour that is known to work rather than a new
+ * code path that has to be made to work.
+ *
+ * The incoming clip is pulled *earlier* rather than the outgoing one extended,
+ * because extending would require source footage past its out point that may
+ * not exist.
+ */
+export function addTransition(
+	timeline: TimelineModel,
+	atFrame: number,
+	frames: number,
+): TransitionResult {
+	const length = Math.round(frames);
+	if (length <= 0) {
+		return { timeline, error: "A transition needs a length of at least one frame." };
+	}
+
+	for (const track of timeline.tracks) {
+		if (track.kind !== "video") continue;
+		const ordered = [...track.clips].sort((a, b) => a.startFrame - b.startFrame);
+		for (let index = 0; index < ordered.length - 1; index++) {
+			const outgoing = ordered[index];
+			const incoming = ordered[index + 1];
+			// The cut this transition is for: the two clips must actually touch.
+			if (outgoing.endFrame !== incoming.startFrame) continue;
+			if (Math.abs(outgoing.endFrame - Math.round(atFrame)) > 2) continue;
+
+			// Neither clip may be shortened below what the overlap consumes, or
+			// the dissolve would outlast the clip it is dissolving.
+			const outLength = outgoing.endFrame - outgoing.startFrame;
+			const inLength = incoming.endFrame - incoming.startFrame;
+			if (length >= outLength || length >= inLength) {
+				return {
+					timeline,
+					error: `A ${length}-frame dissolve doesn't fit: the clips either side are ${outLength} and ${inLength} frames.`,
+				};
+			}
+			// Pulling the incoming clip earlier needs source before its in point.
+			if (incoming.trimStartFrame < length) {
+				return {
+					timeline,
+					error: `'${incoming.name}' has only ${incoming.trimStartFrame} frames of source before its start, so it can't be pulled back ${length}.`,
+				};
+			}
+
+			const tracks = timeline.tracks.map((entry) =>
+				entry.id !== track.id
+					? entry
+					: {
+							...entry,
+							clips: entry.clips.map((clip) => {
+								if (clip.id === outgoing.id) {
+									return { ...clip, fadeOutFrames: length };
+								}
+								if (clip.id === incoming.id) {
+									return {
+										...clip,
+										startFrame: clip.startFrame - length,
+										trimStartFrame: clip.trimStartFrame - length,
+										fadeInFrames: length,
+									};
+								}
+								return clip;
+							}),
+						},
+			);
+
+			return {
+				timeline: { ...timeline, tracks },
+				between: [outgoing.id, incoming.id],
+				frames: length,
+			};
+		}
+	}
+
+	return {
+		timeline,
+		error: `No cut at frame ${Math.round(atFrame)}. A transition goes between two clips that touch — split first, or move a clip so its edge meets another.`,
+	};
+}
+
+/** Removes a dissolve, restoring the hard cut. */
+export function removeTransition(timeline: TimelineModel, clipId: string): TimelineModel {
+	return mapClips(timeline, [clipId], (clip) => ({
+		...clip,
+		fadeInFrames: 0,
+		fadeOutFrames: 0,
+	}));
+}

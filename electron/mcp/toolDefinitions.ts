@@ -2017,6 +2017,25 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 
 export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
+		name: "add_transition",
+		description:
+			"Cross-dissolves the cut between two touching clips. Pass the frame the cut is at (from get_timeline's clip boundaries) and how many frames the dissolve should run for.\n\nBuilt from fades rather than a separate effect: the incoming clip is pulled earlier so the two overlap, the outgoing one fades out across the overlap and the incoming one fades in across it. Both already render, so a dissolve behaves exactly like the fades you can set by hand.\n\nRefused, with the reason, when it cannot honestly be made — a dissolve longer than the clips it joins, or one needing source footage before the incoming clip's in point that doesn't exist. Pass removeClipId instead to restore a hard cut. Undoable.",
+		inputSchema: object({
+			atFrame: {
+				type: "number",
+				description: "The frame the cut is at — where one clip ends and the next begins.",
+			},
+			frames: {
+				type: "number",
+				description: "Length of the dissolve. 12–24 reads as a soft cut at 30fps.",
+			},
+			removeClipId: {
+				type: "string",
+				description: "Instead of adding: clears this clip's fades, restoring a hard cut.",
+			},
+		}),
+	},
+	{
 		name: "duplicate_clips",
 		description:
 			"Copies clips and places each copy immediately after its original on the same track, pushing nothing aside — a copy that overwrote its neighbour would be a move, not a duplicate. Returns the new clip ids so the copies can be edited straight away. Undoable as one step.\n\nUse for repeating a beat, or for making a variant to grade differently while keeping the original.",

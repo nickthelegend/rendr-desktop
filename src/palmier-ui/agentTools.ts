@@ -72,6 +72,7 @@ import { listSources } from "./Recording";
 import {
 	addTextClip,
 	addTrack,
+	addTransition,
 	addZoomRegion,
 	totalFrames as computeTotalFrames,
 	duplicateClips,
@@ -82,6 +83,7 @@ import {
 	nudgeClips,
 	removeClips,
 	removeTrack,
+	removeTransition,
 	removeZoomRegion,
 	renameTrack,
 	reorderTrack,
@@ -1771,6 +1773,47 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		add_transition(args) {
+			const removeClipId = asString(args.removeClipId);
+			if (removeClipId) {
+				if (!findClip(timeline, removeClipId)) {
+					return fail("unknown_clip", `No clip '${removeClipId}'.`);
+				}
+				return mutate(
+					"Remove transition",
+					(t) => removeTransition(t, removeClipId),
+					() => ({
+						restored: removeClipId,
+						note: "Fades cleared, so the cut is hard again. The clip's timing is unchanged.",
+					}),
+				);
+			}
+
+			const atFrame = asNumber(args.atFrame);
+			const frames = asNumber(args.frames);
+			if (atFrame === null || frames === null) {
+				return fail(
+					"invalid_argument",
+					"Pass atFrame and frames, or removeClipId to restore a hard cut.",
+				);
+			}
+
+			// Attempted on the timeline in hand so the refusal can be reported
+			// with its reason rather than as a silent no-change.
+			const attempt = addTransition(timeline, atFrame, frames);
+			if (attempt.error) return fail("transition_refused", attempt.error);
+
+			return mutate(
+				"Add transition",
+				(t) => addTransition(t, atFrame, frames).timeline,
+				() => ({
+					between: attempt.between,
+					frames: attempt.frames,
+					note: "The incoming clip was pulled earlier so the two overlap, and both carry matching fades across it — the same fades you can set by hand.",
+				}),
+			);
 		},
 
 		duplicate_clips(args) {
