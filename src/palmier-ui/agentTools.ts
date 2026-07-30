@@ -150,7 +150,7 @@ import {
 	type WorkflowModel,
 	workflowIssues,
 } from "./workflow";
-import { runWorkflow } from "./workflowRun";
+import { ASPECTS, reframeClips, runWorkflow } from "./workflowRun";
 import { cursorFocusAt, DEFAULT_ZOOM_TIMING, scaleForDepth, ZOOM_TIMING_LIMITS } from "./zoom";
 
 export interface ToolResult {
@@ -1774,6 +1774,45 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		reframe_timeline(args) {
+			const name = asString(args.aspect);
+			const aspect = name ? ASPECTS[name] : undefined;
+			if (!aspect) {
+				return fail(
+					"invalid_argument",
+					`No aspect '${name}'. Use one of: ${Object.keys(ASPECTS).join(", ")}.`,
+				);
+			}
+			const visual = timeline.tracks
+				.filter((track) => track.kind === "video")
+				.flatMap((track) => track.clips)
+				.filter((clip) => clip.mediaType !== "text");
+			if (visual.length === 0) {
+				return fail(
+					"nothing_to_reframe",
+					"There is no footage on the timeline to reframe.",
+				);
+			}
+
+			return mutate(
+				"Reframe",
+				(t) => reframeClips(t, aspect),
+				(next) => ({
+					aspect: name,
+					clips: next.tracks
+						.filter((track) => track.kind === "video")
+						.flatMap((track) => track.clips)
+						.filter((clip) => clip.mediaType !== "text")
+						.map((clip) => ({
+							id: clip.id,
+							width: Number(clip.transform.width.toFixed(3)),
+							height: clip.transform.height,
+						})),
+					note: "The frame keeps its pixel size; the footage is centred and cover-fitted, so nothing is letterboxed. Text and captions were left alone — they are composed for the frame, not cropped from a source.",
+				}),
+			);
 		},
 
 		duck_audio(args) {

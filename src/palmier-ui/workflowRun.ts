@@ -67,8 +67,8 @@ export interface RunReport {
 	outputPath?: string;
 }
 
-/** Aspects a reframe node understands, as width/height. */
-const ASPECTS: Record<string, number> = {
+/** Aspects a reframe understands, as width/height. */
+export const ASPECTS: Record<string, number> = {
 	"9:16": 9 / 16,
 	"1:1": 1,
 	"4:5": 4 / 5,
@@ -82,7 +82,7 @@ const ASPECTS: Record<string, number> = {
  * occupies, centred and cover-fitted, so a 16:9 screen recording reframed to
  * 9:16 shows the middle of the screen rather than a letterboxed miniature.
  */
-function reframeClips(timeline: TimelineModel, aspect: number): TimelineModel {
+export function reframeClips(timeline: TimelineModel, aspect: number): TimelineModel {
 	const projectAspect = timeline.width / timeline.height;
 	// Width the footage needs so its height fills the target frame.
 	const width = projectAspect / aspect;

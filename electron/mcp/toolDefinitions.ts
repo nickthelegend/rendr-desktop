@@ -2017,6 +2017,21 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 
 export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
+		name: "reframe_timeline",
+		description:
+			"Recomposes every visual clip for another aspect — 9:16 for vertical, 1:1 or 4:5 for square-ish feeds, 16:9 to go back. The project keeps its pixel size; what changes is the box the footage occupies, centred and cover-fitted, so a 16:9 screen recording reframed to 9:16 shows the middle of the screen at full height rather than a letterboxed miniature.\n\nThis is the one call that turns a landscape recording into something postable vertically. Text and captions are left alone, since they are already composed for the frame rather than cropped from a source. Undoable as one step.",
+		inputSchema: object(
+			{
+				aspect: {
+					type: "string",
+					enum: ["9:16", "1:1", "4:5", "16:9"],
+					description: "Target aspect as width:height.",
+				},
+			},
+			["aspect"],
+		),
+	},
+	{
 		name: "duck_audio",
 		description:
 			"Drops a clip's level under the narration so speech stays intelligible over it — the mix problem every voiced demo has.\n\nBy default it ducks every clip that isn't narration, under every narration clip it finds, so a whole demo is balanced in one call. Pass clipIds to duck only those.\n\nWritten as volume keyframes rather than a separate audio stage, because those already drive both playback and the export mixdown: a duck is audible while scrubbing and present in the file, with no bake step. Each line gets four points — full, down, down, back up — because ramping is what stops a duck sounding like a gate. Lines closer together than two ramps duck once and stay down between them, so the bed doesn't pump.\n\nRun it again after re-narrating: it replaces the automation rather than layering more. Undoable.",
