@@ -2017,6 +2017,27 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 
 export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
+		name: "export_subtitles",
+		description:
+			"Writes the timeline's captions as a subtitle file — SRT for most platforms, VTT for the web. This is what you upload alongside a demo so it is searchable and watchable muted, which is how most of a feed watches it.\n\nCues come from the caption clips as they stand, so anything edited on the timeline is in the file. Timings are taken from each clip's position, so moving a caption moves its cue.\n\nCall with no groupId to use the only group present; pass one when a project has more than one. get_transcript lists the groups. Returns the text as well as writing the file, so an agent can read back what it produced.",
+		inputSchema: object({
+			format: {
+				type: "string",
+				enum: ["srt", "vtt"],
+				description: "Default srt.",
+			},
+			groupId: {
+				type: "string",
+				description: "Which caption group. Omit when there is only one.",
+			},
+			download: {
+				type: "boolean",
+				description:
+					"Default true — writes the file. false returns the text only, for inspection or for embedding elsewhere.",
+			},
+		}),
+	},
+	{
 		name: "match_color",
 		description:
 			"Grades one clip to match another. Renders a frame from each, measures both, and applies the exposure, contrast, saturation, temperature and tint that close the gap.\n\nThis is the tool for the shot that doesn't cut with the one before it — a take recorded under different light, or a clip from another session.\n\nThe correction is applied on top of whatever the clip already carries rather than replacing it, because a match is a correction and not a reset: discarding a look somebody chose in order to fix exposure would be the wrong trade. Pass measureOnly to see the gap and the grade it would apply without changing anything.\n\nOnly the five global controls. Matching shadows and highlights separately needs a per-band solve a mean-luma comparison cannot honestly support, and guessing would produce a grade that measures closer while looking worse. A gap under what anyone can see is left alone rather than dirtying the grade for no visible gain. Undoable.",

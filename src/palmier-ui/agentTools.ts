@@ -27,6 +27,7 @@ import {
 	hasBackground,
 } from "./background";
 import {
+	type Cue,
 	captionClips,
 	captionGroups,
 	groupWordsIntoCues,
@@ -34,6 +35,8 @@ import {
 	parseSubtitles,
 	placeCaptions,
 	removeCaptionGroup,
+	toSrt,
+	toVtt,
 	transcriptText,
 	transcriptWords,
 } from "./captions";
@@ -1781,6 +1784,83 @@ export function createAgentTools(api: EditorApi) {
 						}
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
+			});
+		},
+
+		export_subtitles(args) {
+			const format = asString(args.format) === "vtt" ? "vtt" : "srt";
+			const groups = [
+				...new Set(
+					timeline.tracks
+						.flatMap((track) => track.clips)
+						.map((clip) => clip.captionGroupId)
+						.filter((id): id is string => id !== undefined),
+				),
+			];
+			if (groups.length === 0) {
+				return fail(
+					"no_captions",
+					"This timeline has no captions. Run add_captions, or narrate_timeline which writes them from the script.",
+				);
+			}
+
+			const groupId = asString(args.groupId) ?? (groups.length === 1 ? groups[0] : null);
+			if (!groupId) {
+				return fail(
+					"ambiguous_group",
+					`This project has more than one caption group: ${groups.join(", ")}. Pass groupId to say which.`,
+				);
+			}
+			if (!groups.includes(groupId)) {
+				return fail("unknown_group", `No caption group '${groupId}'.`);
+			}
+
+			// Timings come from where the clips actually sit, so a caption that
+			// was moved on the timeline moves its cue too.
+			const cues: Cue[] = timeline.tracks
+				.flatMap((track) => track.clips)
+				.filter((clip) => clip.captionGroupId === groupId)
+				.sort((a, b) => a.startFrame - b.startFrame)
+				.map((clip, index) => ({
+					id: String(index + 1),
+					startMs: (clip.startFrame / timeline.fps) * 1000,
+					endMs: (clip.endFrame / timeline.fps) * 1000,
+					text: clip.content ?? "",
+				}));
+			if (cues.length === 0) {
+				return fail("empty_group", `Caption group '${groupId}' has no clips.`);
+			}
+
+			/*
+			 * Overlapping cues are legal in the file and a mess on screen.
+			 *
+			 * Most players show both stacked or pick one arbitrarily, so a
+			 * subtitle track that reads fine on this timeline can be unreadable
+			 * on a platform. Reported rather than fixed: trimming one cue is a
+			 * timing decision, and silently shortening somebody's subtitle to
+			 * make a validator happy is not this tool's call.
+			 */
+			const overlapping = cues.filter(
+				(cue, index) => index > 0 && cue.startMs < cues[index - 1].endMs,
+			);
+
+			const text = format === "vtt" ? toVtt(cues) : toSrt(cues);
+			const filename = `${state.projectName}.${format}`;
+			if (args.download !== false) api.downloadText(filename, text);
+
+			return ok({
+				format,
+				groupId,
+				cues: cues.length,
+				...(args.download === false ? {} : { filename }),
+				text,
+				...(overlapping.length
+					? {
+							overlapping: overlapping.length,
+							warning: `${overlapping.length} ${overlapping.length === 1 ? "cue overlaps the one" : "cues overlap the ones"} before ${overlapping.length === 1 ? "it" : "them"}. That is legal in the file but shows as stacked or dropped subtitles on most players — usually it means two notes sit too close together on the timeline.`,
+						}
+					: {}),
+				note: "Cues are taken from the caption clips as they stand, so anything edited on the timeline is in the file.",
 			});
 		},
 
