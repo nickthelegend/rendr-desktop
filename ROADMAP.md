@@ -1,6 +1,6 @@
 # What's left
 
-Rendr has **100 MCP tools**, every one with a handler, a registry entry, and a
+Rendr has **101 MCP tools**, every one with a handler, a registry entry, and a
 live run against the running app.
 
 Two rules produced all hundred, and are worth keeping:

@@ -174,7 +174,7 @@ claude mcp add --transport http rendr http://127.0.0.1:19790/mcp
 Any other MCP-capable client works the same way — point it at that URL while Rendr
 is running.
 
-### What the agent can do — 100 tools
+### What the agent can do — 101 tools
 
 Every one has a handler, is advertised over MCP, and has been run against the
 running app. None is a stub.
