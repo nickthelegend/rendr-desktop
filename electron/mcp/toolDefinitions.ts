@@ -2017,6 +2017,32 @@ export const WORKFLOW_TOOLS: AgentTool[] = [
 
 export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
+		name: "normalize_audio",
+		description:
+			"Measures each clip's actual loudness and sets its level to match a target, so a demo doesn't jump in volume between a screen recording and a narration line.\n\nThe average is taken over the audible passages only — a take with thirty seconds of silence at the head is not quiet, and averaging the silence in would push the gain far too high.\n\nGain is held back rather than clipping: if reaching the target would push the peak past the ceiling, it goes as far as it can and reports the shortfall, because reaching a target by clipping the transients is not reaching it. Call with measureOnly to read the levels without changing anything.\n\nThis is unweighted program RMS, not ITU-R BS.1770, so the figures are not LUFS and are not labelled as such. For matching clips from the same capture, which is what this is for, that is the number that matters. Undoable.",
+		inputSchema: object({
+			clipIds: {
+				type: "array",
+				items: { type: "string" },
+				description: "Clips to normalise. Omit for every clip that carries audio.",
+			},
+			targetDb: {
+				type: "number",
+				description:
+					"Program level to aim for, in dBFS. Default -18, which leaves room for a narration line on top.",
+			},
+			ceilingDb: {
+				type: "number",
+				description: "Peak must not cross this. Default -1.",
+			},
+			measureOnly: {
+				type: "boolean",
+				description:
+					"Report each clip's loudness and the gain it would need, and change nothing.",
+			},
+		}),
+	},
+	{
 		name: "reframe_timeline",
 		description:
 			"Recomposes every visual clip for another aspect — 9:16 for vertical, 1:1 or 4:5 for square-ish feeds, 16:9 to go back. The project keeps its pixel size; what changes is the box the footage occupies, centred and cover-fitted, so a 16:9 screen recording reframed to 9:16 shows the middle of the screen at full height rather than a letterboxed miniature.\n\nThis is the one call that turns a landscape recording into something postable vertically. Text and captions are left alone, since they are already composed for the frame rather than cropped from a source. Undoable as one step.",

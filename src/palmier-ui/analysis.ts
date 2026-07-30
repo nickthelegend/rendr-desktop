@@ -396,3 +396,83 @@ export function suggestedDenoiseStrength(profile: NoiseProfile): number {
 	const raw = (profile.floorDb + 70) / 50;
 	return Number(Math.min(1, Math.max(0, raw)).toFixed(2));
 }
+
+export interface LoudnessProfile {
+	/** Average level of the parts that are actually audible, in dBFS. */
+	programDb: number;
+	/** True peak, in dBFS. 0 is full scale. */
+	peakDb: number;
+	/** Fraction of the file above the silence threshold. */
+	activeRatio: number;
+}
+
+/**
+ * How loud a clip actually sounds.
+ *
+ * Averaged over the *audible* passages rather than the whole file: a take with
+ * thirty seconds of silence at the head is not quiet, and averaging the silence
+ * in would say it was and push the gain far too high. RMS over short windows,
+ * ignoring anything below the noise floor.
+ *
+ * Not full ITU-R BS.1770 — no K-weighting or gating — so it is not an LUFS
+ * figure and is not labelled as one. For matching two clips from the same
+ * capture, which is what this is for, unweighted program RMS is what matters.
+ */
+export function measureLoudness(samples: Float32Array, sampleRate: number): LoudnessProfile {
+	const window = Math.max(1, Math.floor(sampleRate * 0.05));
+	const windows = Math.floor(samples.length / window);
+	if (windows < 1) return { programDb: -120, peakDb: -120, activeRatio: 0 };
+
+	let peak = 0;
+	for (let index = 0; index < samples.length; index++) {
+		const value = Math.abs(samples[index]);
+		if (value > peak) peak = value;
+	}
+
+	// Anything this far below the loudest window is silence rather than program.
+	const levels: number[] = [];
+	for (let index = 0; index < windows; index++) {
+		levels.push(rms(samples, index * window, window));
+	}
+	const loudest = Math.max(...levels);
+	const floor = loudest * 0.02;
+
+	const active = levels.filter((level) => level > floor);
+	if (active.length === 0) {
+		return { programDb: -120, peakDb: gainToDb(peak), activeRatio: 0 };
+	}
+	// Power average, not an average of decibels: averaging dB values understates
+	// the level of anything with dynamics in it.
+	const power = active.reduce((sum, level) => sum + level * level, 0) / active.length;
+
+	return {
+		programDb: Number(gainToDb(Math.sqrt(power)).toFixed(1)),
+		peakDb: Number(gainToDb(peak).toFixed(1)),
+		activeRatio: Number((active.length / levels.length).toFixed(3)),
+	};
+}
+
+/**
+ * The gain that brings a clip to a target, without clipping.
+ *
+ * Held back when the peak would cross full scale: reaching a target level by
+ * clipping the transients is not reaching it, and a receipt that claimed the
+ * target had been hit would be wrong. The shortfall is reported so a caller can
+ * say so rather than silently delivering something quieter than asked for.
+ */
+export function normalizationGainDb(
+	profile: LoudnessProfile,
+	targetDb: number,
+	ceilingDb = -1,
+): { gainDb: number; limitedBy: "peak" | null; shortfallDb: number } {
+	const wanted = targetDb - profile.programDb;
+	const headroom = ceilingDb - profile.peakDb;
+	if (wanted <= headroom) {
+		return { gainDb: Number(wanted.toFixed(2)), limitedBy: null, shortfallDb: 0 };
+	}
+	return {
+		gainDb: Number(headroom.toFixed(2)),
+		limitedBy: "peak",
+		shortfallDb: Number((wanted - headroom).toFixed(2)),
+	};
+}

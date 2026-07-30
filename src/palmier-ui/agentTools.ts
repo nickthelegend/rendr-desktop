@@ -13,7 +13,9 @@ import {
 	detectBeats,
 	detectSilence,
 	findSyncOffset,
+	measureLoudness,
 	measureNoiseFloor,
+	normalizationGainDb,
 	suggestedDenoiseStrength,
 } from "./analysis";
 import { decodeAudio, monoSamples } from "./audio";
@@ -1774,6 +1776,101 @@ export function createAgentTools(api: EditorApi) {
 					: {}),
 				note: "Generated on this machine with Kokoro. The lines are on the narration track, each starting at its note's frame.",
 			});
+		},
+
+		async normalize_audio(args) {
+			const targetDb = asNumber(args.targetDb) ?? -18;
+			const ceilingDb = asNumber(args.ceilingDb) ?? -1;
+			const asked = asArray(args.clipIds).filter(
+				(value): value is string => typeof value === "string",
+			);
+
+			const carriesAudio = (clip: ClipModel) => {
+				if (clip.mediaType === "text" || clip.mediaType === "image") return false;
+				const asset = state.assets.find((entry) => entry.id === clip.assetId);
+				return Boolean(asset && !asset.offline && asset.url && asset.hasAudio !== false);
+			};
+			const targets = timeline.tracks
+				.flatMap((track) => track.clips)
+				.filter(carriesAudio)
+				.filter((clip) => (asked.length === 0 ? true : asked.includes(clip.id)));
+
+			if (targets.length === 0) {
+				return fail(
+					"nothing_to_normalize",
+					"No clip on the timeline carries decodable audio.",
+				);
+			}
+
+			const measured: Array<{
+				clipId: string;
+				programDb: number;
+				peakDb: number;
+				gainDb: number;
+				limitedBy: "peak" | null;
+				shortfallDb: number;
+			}> = [];
+			for (const clip of targets) {
+				const asset = state.assets.find((entry) => entry.id === clip.assetId);
+				if (!asset) continue;
+				const buffer = await decodeAudio(asset);
+				if (!buffer) continue;
+				const profile = measureLoudness(monoSamples(buffer), buffer.sampleRate);
+				if (profile.activeRatio === 0) continue;
+				const gain = normalizationGainDb(profile, targetDb, ceilingDb);
+				measured.push({
+					clipId: clip.id,
+					programDb: profile.programDb,
+					peakDb: profile.peakDb,
+					// The level it will end up at, relative to the clip's own.
+					gainDb: gain.gainDb,
+					limitedBy: gain.limitedBy,
+					shortfallDb: gain.shortfallDb,
+				});
+			}
+
+			if (measured.length === 0) {
+				return fail(
+					"decode_failed",
+					"Couldn't decode any of those clips, or they are silent throughout.",
+				);
+			}
+
+			const held = measured.filter((entry) => entry.limitedBy === "peak");
+			if (args.measureOnly === true) {
+				return ok({
+					measureOnly: true,
+					clips: measured,
+					targetDb,
+					note: "Nothing was changed. programDb is unweighted program RMS over the audible passages, not LUFS.",
+				});
+			}
+
+			return mutate(
+				"Normalize audio",
+				(t) =>
+					measured.reduce((acc, entry) => {
+						const clip = findClip(acc, entry.clipId);
+						if (!clip) return acc;
+						return setClipNumber(
+							acc,
+							[entry.clipId],
+							"volumeDb",
+							clip.volumeDb + entry.gainDb,
+						);
+					}, t),
+				() => ({
+					normalized: measured.length,
+					targetDb,
+					clips: measured,
+					...(held.length
+						? {
+								warning: `${held.length} ${held.length === 1 ? "clip" : "clips"} couldn't reach the target without clipping, so ${held.length === 1 ? "it was" : "they were"} left as loud as the ceiling allows. Lower targetDb, or accept the shortfall.`,
+							}
+						: {}),
+					note: "Levels measured over the audible passages only, so silence at the head didn't inflate the gain.",
+				}),
+			);
 		},
 
 		reframe_timeline(args) {
