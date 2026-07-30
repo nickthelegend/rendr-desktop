@@ -370,3 +370,39 @@ const FILLER_WORDS = ["um", "uh", "erm", "hmm", "mmm", "ah", "eh"];
 export function isFiller(text: string): boolean {
 	return FILLER_WORDS.includes(text.toLowerCase().replace(/[^a-z]/gi, ""));
 }
+
+/**
+ * Subtitles cut from the narration itself.
+ *
+ * The narration lines are the one transcript this app can be *certain* of —
+ * the text is the script and the duration was measured off the rendered
+ * audio — so subtitles come straight from them rather than from a speech
+ * recogniser guessing at its own output. Word timing is inferred
+ * length-weighted within each line, then regrouped into cues short enough to
+ * read at a glance, and rendered with the karaoke per-word animation.
+ */
+export function narrationCues(
+	lines: ReadonlyArray<{
+		commentId: string;
+		startFrame: number;
+		seconds: number;
+		text: string;
+	}>,
+	fps: number,
+): Cue[] {
+	const words: CaptionWord[] = [];
+	for (const line of lines) {
+		const startMs = (line.startFrame / fps) * 1000;
+		words.push(
+			...inferWordTiming({
+				id: `narr-${line.commentId}`,
+				startMs,
+				endMs: startMs + line.seconds * 1000,
+				text: line.text,
+			}),
+		);
+	}
+	// The gap between narration lines reads as a pause, so grouping never
+	// merges two lines into one cue.
+	return groupWordsIntoCues(words, { pauseMs: 500 });
+}

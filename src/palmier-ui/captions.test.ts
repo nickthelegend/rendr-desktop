@@ -6,6 +6,7 @@ import {
 	groupWordsIntoCues,
 	inferWordTiming,
 	isFiller,
+	narrationCues,
 	parseSubtitles,
 	parseTimestamp,
 	placeCaptions,
@@ -267,5 +268,48 @@ describe("groupWordsIntoCues", () => {
 
 	it("returns nothing for no words", () => {
 		expect(groupWordsIntoCues([])).toEqual([]);
+	});
+});
+
+describe("subtitles cut from narration", () => {
+	const lines = [
+		{
+			commentId: "a",
+			startFrame: 0,
+			seconds: 4,
+			text: "Rendr records your screen and edits it here.",
+		},
+		{ commentId: "b", startFrame: 240, seconds: 3, text: "The zoom follows your cursor." },
+	];
+
+	it("covers each line's exact spoken span", () => {
+		const cues = narrationCues(lines, 30);
+		expect(cues.length).toBeGreaterThanOrEqual(2);
+		expect(cues[0].startMs).toBe(0);
+		// The last cue of the run ends when the last line's audio ends.
+		expect(cues[cues.length - 1].endMs).toBeCloseTo(8000 + 3000, 0);
+	});
+
+	it("never merges two narration lines into one cue", () => {
+		// The 4s gap between line a's end and line b's start reads as a pause.
+		const cues = narrationCues(lines, 30);
+		const crossing = cues.find((cue) => cue.startMs < 4001 && cue.endMs > 8000);
+		expect(crossing).toBeUndefined();
+	});
+
+	it("carries word timing for the karaoke renderer", () => {
+		const cues = narrationCues(lines, 30);
+		for (const cue of cues) {
+			expect(cue.words?.length).toBeGreaterThan(0);
+			// Words tile the cue without gaps, so the highlight never stalls.
+			const words = cue.words ?? [];
+			for (let i = 1; i < words.length; i++) {
+				expect(words[i].startMs).toBeCloseTo(words[i - 1].endMs, 5);
+			}
+		}
+	});
+
+	it("returns nothing for no lines", () => {
+		expect(narrationCues([], 30)).toEqual([]);
 	});
 });

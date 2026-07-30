@@ -607,6 +607,25 @@
 	user-select: text;
 }
 
+/* Notes and narration lines are prose: they need room to wrap and to be read
+   back before saving. ⌘-Enter commits; plain Enter is a new line. */
+.pmr-textinput--multiline {
+	height: auto;
+	min-height: 92px;
+	padding: 8px;
+	line-height: 1.5;
+	resize: vertical;
+	font-family: inherit;
+}
+
+.pmr-row--tall {
+	align-items: flex-start;
+}
+
+.pmr-row--tall .pmr-row__label {
+	padding-top: 6px;
+}
+
 .pmr-textinput:focus {
 	outline: none;
 	border-color: var(--pmr-accent);

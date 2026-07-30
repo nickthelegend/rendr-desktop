@@ -2007,6 +2007,11 @@ export const NARRATION_TOOLS: AgentTool[] = [
 				description:
 					"Default false. true re-speaks notes that already have current audio, replacing it.",
 			},
+			subtitles: {
+				type: "boolean",
+				description:
+					"Default true. Karaoke word-by-word subtitles on the CC track, cut from the narration script itself with length-weighted word timing — the one transcript that is exact rather than recognised. Replaced wholesale on every run. Pass false for narration with no captions.",
+			},
 			commentIds: {
 				type: "array",
 				items: { type: "string" },

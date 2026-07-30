@@ -1713,6 +1713,7 @@ export function createAgentTools(api: EditorApi) {
 					voice,
 					speed,
 					regenerate,
+					subtitles: args.subtitles !== false,
 					...(only.length ? { commentIds: only } : {}),
 				});
 			} catch (error) {
@@ -1733,6 +1734,7 @@ export function createAgentTools(api: EditorApi) {
 				voice: result.voice,
 				speed,
 				track: "Narration",
+				...(args.subtitles !== false ? { subtitles: "CC track, karaoke word timing" } : {}),
 				lines: result.lines,
 				...(overruns.length
 					? {

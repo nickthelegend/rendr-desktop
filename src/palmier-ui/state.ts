@@ -15,6 +15,7 @@ import { type BackgroundSettings, DEFAULT_BACKGROUND } from "./background";
 import {
 	type Cue,
 	groupWordsIntoCues,
+	narrationCues,
 	parseSubtitles,
 	placeCaptions,
 	removeCaptionGroup,
@@ -32,6 +33,8 @@ export interface NarrationOptions {
 	speed?: number;
 	regenerate?: boolean;
 	commentIds?: readonly string[];
+	/** Karaoke subtitles on the CC track, cut from the script. Default on. */
+	subtitles?: boolean;
 }
 
 export interface NarrationResult {
@@ -833,8 +836,33 @@ export function useEditorState() {
 
 			addAssets(rendered.map((line) => line.asset));
 
+			const fps = timeline.fps;
 			commit("Narrate timeline", (current) => {
 				let next = current;
+
+				// Subtitles, cut from the same script. The narration lines are
+				// the one transcript this app is certain of, so the karaoke
+				// captions come straight from them. Replaced wholesale each run,
+				// so re-narrating never stacks stale cues under new audio.
+				if (options.subtitles !== false) {
+					next = removeCaptionGroup(next, "narration");
+					next = placeCaptions(
+						next,
+						narrationCues(
+							rendered.map((line) => ({
+								commentId: line.comment.id,
+								startFrame: line.comment.frame,
+								seconds: line.seconds,
+								text: line.comment.text,
+							})),
+							fps,
+						),
+						{
+							groupId: "narration",
+							toFrame: (sourceMs) => Math.round((sourceMs / 1000) * fps),
+						},
+					).timeline;
+				}
 				let track = next.tracks.find((entry) => entry.name === NARRATION_TRACK);
 				if (!track) {
 					next = addTrack(next, "audio");

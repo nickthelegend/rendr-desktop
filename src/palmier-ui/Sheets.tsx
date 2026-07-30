@@ -467,19 +467,34 @@ export function PromptSheet({ request, onClose }: { request: PromptRequest; onCl
 					</button>
 				</div>
 				<div className="pmr-sheet__body">
-					<div className="pmr-row">
+					<div className="pmr-row pmr-row--tall">
 						<span className="pmr-row__label">{request.label}</span>
 						<div className="pmr-row__control">
-							<input
-								className="pmr-textinput"
+							<textarea
+								className="pmr-textinput pmr-textinput--multiline"
 								value={value}
-								// The whole point of the dialog is this field, so
-								// it takes focus with its text selected — typing
-								// replaces the old name, as a rename should.
-								ref={(node) => node?.select()}
+								rows={4}
+								// Focus lands here, since the field is the whole
+								// point of the dialog. Short values are selected so
+								// typing replaces them; a long note is left with the
+								// caret at the end, because replacing a paragraph
+								// you meant to extend loses work.
+								ref={(node) => {
+									if (!node) return;
+									node.focus();
+									if (node.value.length <= 60) node.select();
+									else
+										node.setSelectionRange(
+											node.value.length,
+											node.value.length,
+										);
+								}}
 								onChange={(event) => setValue(event.target.value)}
 								onKeyDown={(event) => {
-									if (event.key === "Enter") {
+									// A narration line is prose and wants room to
+									// wrap, so Enter commits only with a modifier
+									// and a plain Enter starts a new line.
+									if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
 										event.preventDefault();
 										submit();
 									}
