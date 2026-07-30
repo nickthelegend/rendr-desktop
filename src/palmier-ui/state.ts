@@ -1285,6 +1285,23 @@ export function useEditorState() {
 	 * back afterwards is still null and the caller would report a real creation
 	 * as a failure.
 	 */
+	/**
+	 * Replaces a timeline that is not necessarily the active one.
+	 *
+	 * `commit` only ever touches the active cut, which is right for editing but
+	 * leaves no way to build a derived timeline — a vertical variant, say —
+	 * without switching to it first and switching back. Deliberately outside the
+	 * undo stack: this creates cuts rather than editing one, and pushing each
+	 * onto the stack would make undo walk backwards through a batch.
+	 */
+	const replaceTimeline = useCallback((next: TimelineModel) => {
+		setState((current) => ({
+			...current,
+			timelines: current.timelines.map((item) => (item.id === next.id ? next : item)),
+			dirty: true,
+		}));
+	}, []);
+
 	const createTimeline = useCallback(
 		(options: { name?: string; from?: string } = {}) => {
 			const source = options.from
@@ -1295,7 +1312,16 @@ export function useEditorState() {
 			const active =
 				state.timelines.find((item) => item.id === state.activeTimelineId) ??
 				state.timelines[0];
-			const id = `tl-${Date.now().toString(36)}-${state.timelines.length + 1}`;
+			// Both halves of the obvious id are stale inside one synchronous
+			// caller: `state` is the render's snapshot, so the count does not
+			// move between two calls, and two calls land in the same
+			// millisecond. Two timelines then share an id, every lookup returns
+			// the first, and replaceTimeline overwrites both — which is exactly
+			// what batch_export hit when its second variant silently replaced
+			// its first. The random suffix is what makes that unrepresentable.
+			const id = `tl-${Date.now().toString(36)}-${state.timelines.length + 1}-${Math.random()
+				.toString(36)
+				.slice(2, 8)}`;
 			const stamp = id.slice(3);
 
 			const created: TimelineModel = source
@@ -1876,6 +1902,7 @@ export function useEditorState() {
 		saveLook,
 		removeLook,
 		renameLook,
+		replaceTimeline,
 		runNarration,
 		askFor,
 		closePrompt,

@@ -86,9 +86,7 @@ describe("StreamingVideoDecoder local media loading", () => {
 		const decoder = new StreamingVideoDecoder();
 		await decoder.loadMetadata("/tmp/capture.mp4");
 
-		expect(window.electronAPI.getLocalMediaUrl).toHaveBeenCalledWith(
-			"/tmp/capture.mp4",
-		);
+		expect(window.electronAPI.getLocalMediaUrl).toHaveBeenCalledWith("/tmp/capture.mp4");
 		expect(mockDemuxerLoad).toHaveBeenCalledWith(
 			"http://127.0.0.1:4321/video?path=%2Ftmp%2Fcapture.mp4",
 		);

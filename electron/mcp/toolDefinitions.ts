@@ -2972,7 +2972,11 @@ export const AUDIO_TOOLS: AgentTool[] = [
 			"Add fades to clips and choose their shape. fadeInFrames and fadeOutFrames set the lengths; shape sets the curve — 'equalPower' is the right default for crossfading two pieces of music because a linear fade dips in the middle and sounds like a hole, while 'linear' is right for a fade to silence. Applies to audio and video clips: on picture, a fade ramps opacity, on sound it ramps gain. Setting a length to 0 clears that fade. Fades multiply any existing volume keyframes rather than replacing them.",
 		inputSchema: object(
 			{
-				clipIds: { type: "array", items: { type: "string" }, description: "Clips to fade." },
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description: "Clips to fade.",
+				},
 				fadeInFrames: { type: "integer", description: "Fade-in length. 0 clears it." },
 				fadeOutFrames: { type: "integer", description: "Fade-out length. 0 clears it." },
 				shape: {
@@ -3080,6 +3084,221 @@ export const AUDIO_TOOLS: AgentTool[] = [
 	},
 ];
 
+/**
+ * Titles, search, delivery, and looking at the cut.
+ *
+ * The last group. view_frame and compare_frames exist because an agent editing
+ * blind is guessing: every other tool here reports numbers, and these two
+ * return the picture those numbers describe.
+ */
+export const FINISH_TOOLS: AgentTool[] = [
+	{
+		name: "add_title",
+		description:
+			"Add a styled title. Unlike add_texts, which places raw text, this applies a preset that sets typography, position, and size together: 'title' is large and centred, 'lowerThird' sits bottom-left at reading size, 'endCard' is centred with a subtitle line beneath, and 'caption' matches the subtitle style. Returns the clip ids so update_text can refine the wording and add_motion_preset can animate it on.\n\nPlaced on its own text track above the picture, so it is visible without rearranging anything.",
+		inputSchema: object(
+			{
+				text: { type: "string", description: "The title's words." },
+				subtitle: {
+					type: "string",
+					description: "A second, smaller line beneath. Used by 'title' and 'endCard'.",
+				},
+				preset: {
+					type: "string",
+					enum: ["title", "lowerThird", "endCard", "caption"],
+					description: "Default 'title'.",
+				},
+				startFrame: { type: "integer", description: "Where it appears. Default 0." },
+				durationFrames: { type: "integer", description: "How long it holds. Default 90." },
+			},
+			["text"],
+		),
+	},
+	{
+		name: "style_captions",
+		description:
+			"Restyle a whole caption group in one action. Captions are many short clips, so update_text on each is impractical and drifts — one missed clip and a word changes font mid-sentence. Sets font, size, colour, weight, alignment, and case across every clip in the group at once. Use get_timeline to see the caption groups; omit groupId to restyle every caption on the timeline.",
+		inputSchema: object({
+			groupId: {
+				type: "string",
+				description: "Caption group to restyle. Omit for every caption group.",
+			},
+			fontFamily: { type: "string", description: "Font name." },
+			fontSize: { type: "integer", description: "Point size, 12–300." },
+			color: { type: "string", description: "Hex colour, e.g. '#FFEE00'." },
+			bold: { type: "boolean" },
+			italic: { type: "boolean" },
+			uppercase: { type: "boolean" },
+			alignment: { type: "string", enum: ["left", "center", "right"] },
+		}),
+	},
+	{
+		name: "find_text",
+		description:
+			"Search every word on the timeline — titles, text clips, and captions — and report where it appears. Returns the clip id, the track, the frame, and the matching text, so a note like 'fix the typo in the intro' becomes an exact clip to edit. Case-insensitive by default. This is how you locate something to change without reading the whole timeline back.",
+		inputSchema: object(
+			{
+				query: { type: "string", description: "Text to look for." },
+				matchCase: { type: "boolean", description: "Default false." },
+				wholeWord: {
+					type: "boolean",
+					description: "Only match complete words. Default false.",
+				},
+			},
+			["query"],
+		),
+	},
+	{
+		name: "add_countdown",
+		description:
+			"Add a counting sequence of text clips — 3, 2, 1 — each holding for the same length, laid end to end. The usual opener for a timed demo, and tedious to build by hand because it is N separate clips with N separate start frames. Counts down by default; set ascending to count up. Returns every clip id, so the whole run can be restyled or animated in one further call.",
+		inputSchema: object(
+			{
+				from: { type: "integer", description: "Highest number. Default 3." },
+				startFrame: { type: "integer", description: "Where it begins. Default 0." },
+				holdFrames: {
+					type: "integer",
+					description: "Frames per number. Default 30 — one second at 30fps.",
+				},
+				ascending: {
+					type: "boolean",
+					description: "Count up instead of down. Default false.",
+				},
+			},
+			[],
+		),
+	},
+	{
+		name: "batch_export",
+		description:
+			"Build several delivery variants of the same cut in one call — the actual short-form case, where one edit becomes a 9:16 vertical, a 1:1 square, and a 16:9 landscape. Each variant may set its own aspect and its own maximum length.\n\nEach variant becomes its own timeline, sized to that aspect, with every picture clip scaled to cover the new frame rather than letterboxed into it, and cut to length if maxSeconds is set. It does not write files: export_project with the returned timelineId writes each one, and set_active_timeline opens one to check before committing an encode to it.\n\nEvery variant is derived from this cut as it is now, never from the previous variant. That is the whole reason to use this rather than reframing in a loop: running reframe and trim in sequence without restoring compounds them, so the third variant would be reframed three times and cut to a third of the length. A length limit is a hard cut, not a retime, because retiming would change how the narration sounds.",
+		inputSchema: object(
+			{
+				variants: {
+					type: "array",
+					description: "One entry per output.",
+					items: {
+						type: "object",
+						properties: {
+							aspect: {
+								type: "string",
+								enum: ["9:16", "1:1", "16:9", "4:5"],
+								description: "Frame shape for this variant.",
+							},
+							maxSeconds: {
+								type: "number",
+								description:
+									"Cut to at most this long. Omitted leaves the length alone.",
+							},
+							name: { type: "string", description: "Suffix for the output file." },
+						},
+					},
+				},
+			},
+			["variants"],
+		),
+	},
+	{
+		name: "check_timeline",
+		description:
+			"Review the cut for the faults that survive a clean render and are only noticed on watching it back: gaps that show background, clips stacked on one track so the lower one never appears, clips pushed entirely off the canvas, silent video where audio was expected, levels hot enough to clip, captions that outlast their clip, and zero-length or negative-duration clips. Read-only, and it says which tool fixes each finding. Run it before an export.",
+		inputSchema: object({
+			severity: {
+				type: "string",
+				enum: ["all", "problems"],
+				description: "'problems' hides advisory notes. Default 'all'.",
+			},
+		}),
+	},
+	{
+		name: "project_stats",
+		description:
+			"Summarise the project: how many timelines, tracks, and clips, the total duration, how much of it is picture versus silence, which media is used and which is not, how many captions and comments exist, and how much of the library is offline. The orientation call for an agent picking up a project it did not build.",
+		inputSchema: object({}),
+	},
+	{
+		name: "remove_unused_media",
+		description:
+			"Remove library assets that no timeline uses. A project accumulates captured stills, abandoned imports, and narration takes that were regenerated; each one is carried in the project file forever. Reports exactly what it would remove and requires confirm to actually do it, because an asset removed here cannot be recovered from undo — it is library state, not timeline state.",
+		inputSchema: object({
+			confirm: {
+				type: "boolean",
+				description:
+					"Must be true to remove anything. Without it this only reports what is unused.",
+			},
+			keepOffline: {
+				type: "boolean",
+				description:
+					"Keep assets whose file is missing. Default true — an offline asset is usually a broken link to relink, not rubbish to delete.",
+			},
+		}),
+	},
+	{
+		name: "view_frame",
+		description:
+			"Render one frame of the timeline and return it as an image, so it can actually be looked at. Every other read tool returns numbers; this returns the picture those numbers describe. Use it to check a layout, confirm a title is on screen and legible, see whether a zoom framed what it should, or verify a grade before exporting. The frame is the final composite, including transforms, crop, zoom, colour, effects, text, captions, the drawn cursor, and the webcam bubble — exactly what an export writes.",
+		inputSchema: object(
+			{
+				frame: { type: "integer", description: "Project frame to render." },
+				maxEdge: {
+					type: "integer",
+					description:
+						"Longest edge in pixels. Default 640, which is legible and small enough to return quickly.",
+				},
+			},
+			["frame"],
+		),
+	},
+	{
+		name: "compare_frames",
+		description:
+			"Render two frames and return both images side by side with a measured difference, for answering 'did that change anything' and 'do these two shots match'. Reports the difference in exposure, contrast, saturation and colour temperature as well as returning the pictures, so a change too small to see is still reported as a number and a change too subtle to measure is still visible.",
+		inputSchema: object(
+			{
+				frameA: { type: "integer", description: "First frame." },
+				frameB: { type: "integer", description: "Second frame." },
+				maxEdge: { type: "integer", description: "Longest edge in pixels. Default 480." },
+			},
+			["frameA", "frameB"],
+		),
+	},
+	{
+		name: "replace_media",
+		description:
+			"Point clips at a different asset while keeping their timing, grade, effects, transforms and keyframes. This is how a placeholder becomes the real shot, or a re-recorded take replaces the first attempt, without rebuilding the edit around it. Every clip using the old asset is switched unless clipIds narrows it.\n\nWhen the new asset is shorter than a clip's in-point needs, that clip is reported rather than silently left showing its last frame — a clip trimmed past the end of its source is the failure this tool is most likely to cause.",
+		inputSchema: object(
+			{
+				oldMediaRef: { type: "string", description: "Asset currently on the clips." },
+				newMediaRef: { type: "string", description: "Asset to use instead." },
+				clipIds: {
+					type: "array",
+					items: { type: "string" },
+					description:
+						"Restrict to these clips. Omit to switch every clip using the old asset.",
+				},
+			},
+			["oldMediaRef", "newMediaRef"],
+		),
+	},
+	{
+		name: "export_still_sequence",
+		description:
+			"Render a run of frames as PNG assets — a contact sheet of the cut, for checking pacing, picking a thumbnail, or handing frames to an image model. Frames are sampled at an interval rather than every frame, because a hundred full composites is a long wait and a thousand is not a request anyone means. Each still enters the media library and can be placed with add_clips.",
+		inputSchema: object(
+			{
+				startFrame: { type: "integer", description: "First frame. Default 0." },
+				endFrame: { type: "integer", description: "Last frame. Default the timeline end." },
+				count: {
+					type: "integer",
+					description:
+						"How many stills to render, spread evenly across the range. Default 6, maximum 24.",
+				},
+			},
+			[],
+		),
+	},
+];
+
 /** Everything the MCP server advertises. */
 export const MCP_TOOLS: AgentTool[] = [
 	...EDITING_TOOLS,
@@ -3094,6 +3313,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...LOOK_TOOLS,
 	...MOTION_TOOLS,
 	...AUDIO_TOOLS,
+	...FINISH_TOOLS,
 ];
 
 export const TOOLS_BY_NAME = new Map(MCP_TOOLS.map((tool) => [tool.name, tool]));

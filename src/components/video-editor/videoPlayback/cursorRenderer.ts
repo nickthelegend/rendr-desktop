@@ -1345,8 +1345,7 @@ export class PixiCursorOverlay {
 		const projectedTarget = projectCursorPositionToViewport(target, viewport.sourceCrop);
 
 		const h =
-			this.config.dotRadius *
-			getCursorViewportScale(viewport, this.config.minViewportScale);
+			this.config.dotRadius * getCursorViewportScale(viewport, this.config.minViewportScale);
 		const { cursorType, clickSample, clickBounceProgress, clickProgress } =
 			getCursorVisualState(
 				samples,

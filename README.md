@@ -174,21 +174,43 @@ claude mcp add --transport http rendr http://127.0.0.1:19790/mcp
 Any other MCP-capable client works the same way — point it at that URL while Rendr
 is running.
 
-### What the agent can do — 50 tools
+### What the agent can do — 100 tools
+
+Every one has a handler, is advertised over MCP, and has been run against the
+running app. None is a stub.
 
 **Read** · `get_timeline` `inspect_timeline` `get_media` `inspect_media`
 `search_media` `capture_frame` `inspect_color` `get_transcript`
-`get_recording_status` `manage_exports`
+`get_recording_status` `manage_exports` `project_stats` `find_text`
+`find_gaps` `check_timeline`
+
+**Look at it** · `view_frame` `compare_frames` `export_still_sequence`
 
 **Timeline** · `add_clips` `insert_clips` `move_clips` `remove_clips` `split_clips`
 `ripple_delete_ranges` `set_clip_properties` `set_keyframes` `apply_layout`
-`sync_clips` `manage_tracks` `undo`
+`sync_clips` `manage_tracks` `duplicate_clips` `nudge_clips` `trim_clips`
+`add_transition` `fit_to_duration` `trim_dead_air` `undo`
+
+**Arrange** · `align_clips` `distribute_clips` `stagger_clips` `close_gaps`
+`copy_clip_style` `add_freeze_frame` `replace_media`
 
 **Project** · `create_timeline` `set_active_timeline` `set_project_settings`
 `manage_project` `organize_media` `import_media` `export_project`
+`batch_export` `remove_unused_media`
 
-**Look and sound** · `apply_color` `apply_effect` `denoise_audio` `add_texts`
-`update_text` `add_captions` `remove_words` `remove_silence` `detect_beats`
+**Colour** · `apply_color` `auto_color` `match_color` `apply_lut` `reset_grade`
+`save_look` `apply_look` `manage_looks` `check_color_consistency`
+`find_scene_changes`
+
+**Motion and framing** · `add_ken_burns` `add_motion_preset` `crop_clips`
+`reframe_timeline` `apply_effect`
+
+**Sound** · `denoise_audio` `normalize_audio` `duck_audio` `remove_silence`
+`find_silence` `fade_audio` `set_track_volume` `measure_audio`
+`check_audio_sync` `align_to_beats` `detect_beats` `mix_to_asset`
+
+**Text and captions** · `add_texts` `add_title` `add_countdown` `update_text`
+`add_captions` `style_captions` `export_subtitles` `remove_words`
 
 **Recording** · `list_capture_sources` `start_recording` `stop_recording`
 `set_cursor` `set_webcam` `set_background`
@@ -196,6 +218,8 @@ is running.
 **Zoom** · `suggest_zooms` `add_zoom_regions` `update_zoom_regions`
 
 **Notes and narration** · `manage_comments` `setup_voice` `narrate_timeline`
+
+**Workflows** · `manage_workflows` `edit_workflow` `run_workflow`
 
 ### The contract
 

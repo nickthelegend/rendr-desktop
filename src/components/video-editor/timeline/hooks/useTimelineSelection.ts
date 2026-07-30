@@ -55,10 +55,7 @@ export function useTimelineSelection({
 		if (totalMs === 0) return;
 		const time = Math.max(0, Math.min(currentTimeMs, totalMs));
 		if (keyframes.some((kf) => Math.abs(kf.time - time) < 1)) return;
-		setKeyframes((prev) => [
-			...prev,
-			{ id: globalThis.crypto.randomUUID(), time },
-		]);
+		setKeyframes((prev) => [...prev, { id: globalThis.crypto.randomUUID(), time }]);
 	}, [currentTimeMs, totalMs, keyframes]);
 
 	const deleteSelectedKeyframe = useCallback(() => {

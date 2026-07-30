@@ -1,4 +1,4 @@
-import { Gear as Settings2, Question as HelpCircle } from "@phosphor-icons/react";
+import { Question as HelpCircle, Gear as Settings2 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
@@ -15,10 +15,9 @@ export function KeyboardShortcutsHelp() {
 	});
 
 	useEffect(() => {
-		Promise.all([
-			formatShortcut(["shift", "Scroll"]),
-			formatShortcut(["mod", "Scroll"]),
-		]).then(([pan, zoom]) => setScrollLabels({ pan, zoom }));
+		Promise.all([formatShortcut(["shift", "Scroll"]), formatShortcut(["mod", "Scroll"])]).then(
+			([pan, zoom]) => setScrollLabels({ pan, zoom }),
+		);
 	}, []);
 
 	return (

@@ -63,11 +63,11 @@ describe("shouldSeekWebcamMedia", () => {
 	it("does not issue another corrective seek while the webcam element is already seeking", () => {
 		expect(
 			shouldSeekWebcamMedia({
-					desiredTime: 10.5,
+				desiredTime: 10.5,
 				isPlaying: true,
 				isSeeking: true,
 				previousTimelineTime: 10,
-					timelineTime: 10.5,
+				timelineTime: 10.5,
 				webcamCurrentTime: 9.8,
 			}),
 		).toBe(false);
@@ -76,26 +76,26 @@ describe("shouldSeekWebcamMedia", () => {
 	it("seeks when playback drift grows beyond the active threshold", () => {
 		expect(
 			shouldSeekWebcamMedia({
-					desiredTime: 10.5,
+				desiredTime: 10.5,
 				isPlaying: true,
 				isSeeking: false,
 				previousTimelineTime: 10,
-					timelineTime: 10.5,
+				timelineTime: 10.5,
 				webcamCurrentTime: 9.8,
 			}),
 		).toBe(true);
 	});
 
-		it("does not seek when the clamped media target is already correct", () => {
-			expect(
-				shouldSeekWebcamMedia({
-					desiredTime: 1 / 60,
-					isPlaying: false,
-					isSeeking: false,
-					previousTimelineTime: 0,
-					timelineTime: 0,
-					webcamCurrentTime: 1 / 60,
-				}),
-			).toBe(false);
-		});
+	it("does not seek when the clamped media target is already correct", () => {
+		expect(
+			shouldSeekWebcamMedia({
+				desiredTime: 1 / 60,
+				isPlaying: false,
+				isSeeking: false,
+				previousTimelineTime: 0,
+				timelineTime: 0,
+				webcamCurrentTime: 1 / 60,
+			}),
+		).toBe(false);
+	});
 });

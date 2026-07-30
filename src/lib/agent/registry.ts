@@ -112,6 +112,19 @@ export const DECLARED_TOOLS = [
 	"align_to_beats",
 	"mix_to_asset",
 	"check_audio_sync",
+	// Titles, search, delivery, and looking at the cut
+	"add_title",
+	"style_captions",
+	"find_text",
+	"add_countdown",
+	"batch_export",
+	"check_timeline",
+	"project_stats",
+	"remove_unused_media",
+	"view_frame",
+	"compare_frames",
+	"replace_media",
+	"export_still_sequence",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */
@@ -167,6 +180,11 @@ const EDIT_TOOLS_BLOCKED_WHILE_RECORDING = new Set([
 	"fade_audio",
 	"set_track_volume",
 	"align_to_beats",
+	"add_title",
+	"style_captions",
+	"add_countdown",
+	"replace_media",
+	"remove_unused_media",
 ]);
 
 /**

@@ -330,6 +330,67 @@ function gapsOf(clips: readonly ClipModel[], end: number): Array<[number, number
 }
 
 /**
+ * A default, ungraded ColorGrade.
+ *
+ * Taken from withDefaults rather than written out, so it cannot drift from the
+ * model. Every field has to be present: the renderer reads color.contrast and
+ * color.saturation directly, and a missing one throws mid-render, which shows
+ * up as a clip that has silently stopped appearing.
+ */
+const neutralGrade = (): ClipModel["color"] => ({
+	...withDefaults({
+		id: "neutral",
+		name: "neutral",
+		mediaType: "video",
+		startFrame: 0,
+		endFrame: 1,
+	}).color,
+});
+
+/**
+ * Typography and placement per title kind.
+ *
+ * These are the difference between add_title and add_texts: the same words,
+ * but sized and placed so they read at a glance. A lower third sits left and
+ * low because that is where the eye is not, and a title is centred because
+ * that is where it is.
+ */
+const TITLE_PRESETS: Record<
+	string,
+	{
+		main: Record<string, unknown>;
+		sub: Record<string, unknown>;
+		place: Record<string, number>;
+		subPlace: Record<string, number>;
+	}
+> = {
+	title: {
+		main: { fontSize: 96, bold: true, alignment: "center" },
+		sub: { fontSize: 40, bold: false, alignment: "center" },
+		place: { centerX: 0.5, centerY: 0.44 },
+		subPlace: { centerX: 0.5, centerY: 0.56 },
+	},
+	lowerThird: {
+		main: { fontSize: 52, bold: true, alignment: "left" },
+		sub: { fontSize: 32, bold: false, alignment: "left" },
+		place: { centerX: 0.28, centerY: 0.78 },
+		subPlace: { centerX: 0.28, centerY: 0.86 },
+	},
+	endCard: {
+		main: { fontSize: 84, bold: true, alignment: "center" },
+		sub: { fontSize: 36, bold: false, alignment: "center" },
+		place: { centerX: 0.5, centerY: 0.45 },
+		subPlace: { centerX: 0.5, centerY: 0.57 },
+	},
+	caption: {
+		main: { fontSize: 44, bold: true, alignment: "center" },
+		sub: { fontSize: 32, bold: false, alignment: "center" },
+		place: { centerX: 0.5, centerY: 0.82 },
+		subPlace: { centerX: 0.5, centerY: 0.9 },
+	},
+};
+
+/**
  * A neutral world, for correcting toward when there is no reference clip.
  *
  * Mid-grey at 0.5 with the full range present and no colour cast. Correcting
@@ -6216,10 +6277,13 @@ export function createAgentTools(api: EditorApi) {
 				(t) =>
 					mapClips(t, clipIds, (clip) => ({
 						...clip,
-						// Rebuilt from defaults rather than patched, so curves,
-						// balance, hue curves and the LUT go too — patching the
-						// numeric knobs would leave those silently applied.
-						color: { ...withDefaults({ ...clip, color: undefined as never }).color },
+						// A fresh default grade, not a patch and not an empty
+						// object. Patching the numeric knobs would leave curves,
+						// balance, hue curves and the LUT silently applied; an
+						// empty object is worse still, because clipFilter reads
+						// color.contrast directly and an absent one throws while
+						// rendering, so the clip stops appearing at all.
+						color: neutralGrade(),
 						...(alsoEffects ? { effects: [] } : {}),
 					})),
 				() => ({
@@ -6644,6 +6708,717 @@ export function createAgentTools(api: EditorApi) {
 						: frames === 0
 							? "Already in sync to within a frame."
 							: `nudge_clips by ${-frames} frames on '${subject.clip.name}' closes it. Nothing was moved.`,
+			});
+		},
+
+		// ── Titles, search, delivery, and looking at the cut ───────────────
+
+		add_title(args) {
+			const text = asString(args.text);
+			if (!text) return fail("invalid_argument", "text is required.");
+			const preset = asString(args.preset) ?? "title";
+			if (!["title", "lowerThird", "endCard", "caption"].includes(preset))
+				return fail("invalid_argument", `Unknown preset '${preset}'.`);
+			const at = Math.max(0, Math.round(asNumber(args.startFrame) ?? 0));
+			const hold = Math.max(1, Math.round(asNumber(args.durationFrames) ?? 90));
+			const subtitle = asString(args.subtitle);
+
+			const style = TITLE_PRESETS[preset];
+			const made: Array<{ clipId: string; role: string }> = [];
+
+			return mutate(
+				`Add ${preset}`,
+				(t) => {
+					let next = t;
+					const main = addTextClip(next, at, hold, `title-${preset}-${at}`, text);
+					if (!main.clipId) return t;
+					next = main.timeline;
+					next = setClipTextStyle(next, [main.clipId], style.main);
+					next = setClipTransform(next, [main.clipId], style.place);
+					made.push({ clipId: main.clipId, role: "title" });
+
+					if (subtitle && (preset === "title" || preset === "endCard")) {
+						const second = addTextClip(
+							next,
+							at,
+							hold,
+							`title-${preset}-${at}-sub`,
+							subtitle,
+						);
+						if (second.clipId) {
+							next = second.timeline;
+							next = setClipTextStyle(next, [second.clipId], style.sub);
+							next = setClipTransform(next, [second.clipId], style.subPlace);
+							made.push({ clipId: second.clipId, role: "subtitle" });
+						}
+					}
+					return next;
+				},
+				() => ({
+					clips: made,
+					preset,
+					frames: [at, at + hold],
+					note: "update_text refines the wording; add_motion_preset animates it on.",
+				}),
+			);
+		},
+
+		style_captions(args) {
+			const wanted = asString(args.groupId);
+			const groups = captionGroups(timeline);
+			if (groups.length === 0)
+				return fail(
+					"no_captions",
+					"This timeline has no captions. add_captions makes some.",
+				);
+			if (wanted && !groups.includes(wanted))
+				return fail(
+					"unknown_group",
+					`No caption group '${wanted}'. Present: ${groups.join(", ")}.`,
+				);
+
+			const patch: Record<string, unknown> = {};
+			const family = asString(args.fontFamily);
+			if (family) patch.fontFamily = family;
+			const size = asNumber(args.fontSize);
+			if (size !== null) {
+				if (size < CLIP_LIMITS.fontSize.min || size > CLIP_LIMITS.fontSize.max)
+					return fail(
+						"invalid_argument",
+						`fontSize must be ${CLIP_LIMITS.fontSize.min}–${CLIP_LIMITS.fontSize.max}.`,
+					);
+				patch.fontSize = Math.round(size);
+			}
+			const color = asString(args.color);
+			if (color) {
+				if (!/^#[0-9a-fA-F]{6}$/.test(color))
+					return fail(
+						"invalid_argument",
+						`color must be a hex like '#FFEE00', not '${color}'.`,
+					);
+				patch.color = color.toUpperCase();
+			}
+			for (const flag of ["bold", "italic", "uppercase"] as const)
+				if (typeof args[flag] === "boolean") patch[flag] = args[flag];
+			const alignment = asString(args.alignment);
+			if (alignment) {
+				if (!["left", "center", "right"].includes(alignment))
+					return fail("invalid_argument", `Unknown alignment '${alignment}'.`);
+				patch.alignment = alignment;
+			}
+			if (Object.keys(patch).length === 0)
+				return fail("invalid_argument", "Pass at least one style property to change.");
+
+			// Every clip in the group at once: restyling them one at a time is
+			// what leaves one word in the old font halfway through a sentence.
+			const targets = timeline.tracks
+				.flatMap((track) => track.clips)
+				.filter(
+					(clip) => clip.captionGroupId && (!wanted || clip.captionGroupId === wanted),
+				)
+				.map((clip) => clip.id);
+			if (targets.length === 0)
+				return ok({ changed: false, note: "That group has no clips." });
+
+			return mutate(
+				"Style captions",
+				(t) => setClipTextStyle(t, targets, patch),
+				() => ({
+					styled: targets.length,
+					groups: wanted ? [wanted] : groups,
+					applied: patch,
+				}),
+			);
+		},
+
+		find_text(args) {
+			const query = asString(args.query);
+			if (!query?.trim()) return fail("invalid_argument", "query is required.");
+			const matchCase = args.matchCase === true;
+			const whole = args.wholeWord === true;
+			const needle = matchCase ? query : query.toLowerCase();
+
+			const hits: Array<Record<string, unknown>> = [];
+			for (const track of timeline.tracks) {
+				for (const clip of track.clips) {
+					const content = clip.content;
+					if (!content) continue;
+					const hay = matchCase ? content : content.toLowerCase();
+					const found = whole
+						? new RegExp(`\\b${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(
+								hay,
+							)
+						: hay.includes(needle);
+					if (!found) continue;
+					hits.push({
+						clipId: clip.id,
+						trackName: track.name,
+						frames: [clip.startFrame, clip.endFrame],
+						seconds: Number((clip.startFrame / timeline.fps).toFixed(2)),
+						text: content,
+						...(clip.captionGroupId ? { captionGroupId: clip.captionGroupId } : {}),
+					});
+				}
+			}
+			hits.sort((a, b) => (a.frames as number[])[0] - (b.frames as number[])[0]);
+			return ok({
+				query,
+				hits,
+				note: hits.length
+					? "update_text changes the wording on any of these."
+					: "Nothing matched. Captions are only searched once add_captions has run.",
+			});
+		},
+
+		add_countdown(args) {
+			const from = Math.round(asNumber(args.from) ?? 3);
+			if (from < 1 || from > 60)
+				return fail("invalid_argument", "from must be between 1 and 60.");
+			const at = Math.max(0, Math.round(asNumber(args.startFrame) ?? 0));
+			const hold = Math.max(1, Math.round(asNumber(args.holdFrames) ?? 30));
+			const up = args.ascending === true;
+			const numbers = Array.from({ length: from }, (_, index) =>
+				up ? index + 1 : from - index,
+			);
+
+			const made: string[] = [];
+			return mutate(
+				"Add countdown",
+				(t) => {
+					let next = t;
+					for (const [index, value] of numbers.entries()) {
+						const start = at + index * hold;
+						const added = addTextClip(
+							next,
+							start,
+							hold,
+							`countdown-${at}-${value}`,
+							String(value),
+						);
+						if (!added.clipId) return t;
+						next = added.timeline;
+						next = setClipTextStyle(next, [added.clipId], TITLE_PRESETS.title.main);
+						made.push(added.clipId);
+					}
+					return next;
+				},
+				() => ({
+					clipIds: made,
+					numbers,
+					frames: [at, at + numbers.length * hold],
+					note: "All one undo step. style them together with update_text, or animate with add_motion_preset.",
+				}),
+			);
+		},
+
+		batch_export(args) {
+			const raw = asArray(args.variants);
+			if (raw.length === 0)
+				return fail("invalid_argument", "variants must be a non-empty array.");
+			if (raw.length > 6)
+				return fail("invalid_argument", "Six variants at once is the ceiling.");
+
+			const aspects: Record<string, [number, number]> = {
+				"9:16": [9, 16],
+				"1:1": [1, 1],
+				"16:9": [16, 9],
+				"4:5": [4, 5],
+			};
+			const plans: Array<{ aspect: string; maxSeconds: number | null; name: string }> = [];
+			for (const entry of raw as Array<Record<string, unknown>>) {
+				const aspect = asString(entry.aspect);
+				if (!aspect || !(aspect in aspects))
+					return fail(
+						"invalid_argument",
+						`Each variant needs an aspect of ${Object.keys(aspects).join(", ")}.`,
+					);
+				const maxSeconds = asNumber(entry.maxSeconds);
+				if (maxSeconds !== null && maxSeconds <= 0)
+					return fail("invalid_argument", "maxSeconds must be above zero.");
+				plans.push({
+					aspect,
+					maxSeconds,
+					name: asString(entry.name) ?? aspect.replace(":", "x"),
+				});
+			}
+
+			// Every variant is derived from `timeline` — the state as it is now —
+			// and never from the previous variant. Chaining them would compound
+			// the reframes and the trims, so the third variant would be reframed
+			// three times and cut to a third of the length.
+			const snapshot = timeline;
+			const even = (value: number) => Math.max(16, Math.round(value / 2) * 2);
+			const built: Array<Record<string, unknown>> = [];
+
+			for (const plan of plans) {
+				const created = api.createTimeline({
+					name: `${snapshot.name} — ${plan.name}`,
+					from: snapshot.id,
+				});
+				if (!created)
+					return fail("failed", `Couldn't create the '${plan.name}' variant timeline.`);
+
+				const [w, h] = aspects[plan.aspect];
+				const shortEdge = Math.min(snapshot.width, snapshot.height);
+				const width = even(w >= h ? (shortEdge * w) / h : shortEdge);
+				const height = even(w >= h ? shortEdge : (shortEdge * h) / w);
+				const canvasAspect = width / height;
+				const cutAt =
+					plan.maxSeconds === null ? null : Math.round(plan.maxSeconds * snapshot.fps);
+
+				const variant: TimelineModel = {
+					...created,
+					width,
+					height,
+					tracks: created.tracks.map((track) => ({
+						...track,
+						clips: track.clips
+							// A hard cut rather than a speed change: fit_to_duration
+							// retimes, and retiming a variant silently changes how
+							// the narration sounds.
+							.filter((clip) => cutAt === null || clip.startFrame < cutAt)
+							.map((clip) => {
+								const trimmed =
+									cutAt !== null && clip.endFrame > cutAt
+										? { ...clip, endFrame: cutAt }
+										: clip;
+								if (trimmed.mediaType === "audio" || trimmed.mediaType === "text")
+									return trimmed;
+								// Cover the new frame: the source has to be at
+								// least as wide as the canvas in the axis it is
+								// short on, or the reframe shows background.
+								const source = aspectOf(trimmed, canvasAspect);
+								const cover =
+									source >= canvasAspect
+										? { width: source / canvasAspect, height: 1 }
+										: { width: 1, height: canvasAspect / source };
+								return {
+									...trimmed,
+									transform: { ...trimmed.transform, ...cover },
+								};
+							}),
+					})),
+				};
+				api.replaceTimeline(variant);
+				built.push({
+					timelineId: variant.id,
+					name: variant.name,
+					aspect: plan.aspect,
+					resolution: [width, height],
+					frames: computeTotalFrames(variant),
+					durationSeconds: Number((computeTotalFrames(variant) / variant.fps).toFixed(2)),
+				});
+			}
+
+			// createTimeline makes each new cut active, so without this the caller
+			// is left editing the last variant rather than the cut they built it
+			// from — a silent change of what every subsequent tool call means.
+			api.setActiveTimeline(snapshot.id);
+
+			return ok({
+				variants: built,
+				stillEditing: snapshot.name,
+				note: "Each variant is its own timeline, built from this cut as it is now — nothing compounds. The active timeline is unchanged. export_project with a timelineId writes each one, and set_active_timeline opens one to check it first.",
+			});
+		},
+
+		check_timeline(args) {
+			const problemsOnly = asString(args.severity) === "problems";
+			const findings: Array<Record<string, unknown>> = [];
+			const add = (
+				severity: "problem" | "note",
+				message: string,
+				fix: string,
+				where?: Record<string, unknown>,
+			) => {
+				if (problemsOnly && severity === "note") return;
+				findings.push({ severity, message, fix, ...(where ?? {}) });
+			};
+
+			for (const track of timeline.tracks) {
+				const sorted = [...track.clips].sort((a, b) => a.startFrame - b.startFrame);
+				let cursor = 0;
+				for (const [index, clip] of sorted.entries()) {
+					if (clip.endFrame <= clip.startFrame)
+						add(
+							"problem",
+							`'${clip.name}' has no length (${clip.startFrame}→${clip.endFrame}).`,
+							"remove_clips, or set_clip_properties durationFrames.",
+							{ clipId: clip.id },
+						);
+					if (index > 0 && clip.startFrame < sorted[index - 1].endFrame)
+						add(
+							"problem",
+							`'${clip.name}' is stacked on '${sorted[index - 1].name}' on '${track.name}' — the lower one never appears.`,
+							"move_clips, or put one on its own track.",
+							{ clipId: clip.id },
+						);
+					if (clip.startFrame - cursor > 0 && track.kind === "video")
+						add(
+							"note",
+							`${clip.startFrame - cursor} frames of background before '${clip.name}' on '${track.name}'.`,
+							"close_gaps.",
+							{ trackId: track.id, frame: cursor },
+						);
+					cursor = Math.max(cursor, clip.endFrame);
+
+					const { centerX, centerY, width, height } = clip.transform;
+					if (
+						clip.mediaType !== "audio" &&
+						(centerX + width / 2 < 0 ||
+							centerX - width / 2 > 1 ||
+							centerY + height / 2 < 0 ||
+							centerY - height / 2 > 1)
+					)
+						add(
+							"problem",
+							`'${clip.name}' sits entirely off the canvas and renders nothing.`,
+							"apply_layout, or set_clip_properties transform.",
+							{ clipId: clip.id },
+						);
+					if (clip.volumeDb >= 12)
+						add(
+							"note",
+							`'${clip.name}' is at ${clip.volumeDb} dB, close to the +15 ceiling.`,
+							"measure_audio, then normalize_audio.",
+							{ clipId: clip.id },
+						);
+					if (clip.fadeInFrames + clip.fadeOutFrames > clip.endFrame - clip.startFrame)
+						add(
+							"problem",
+							`'${clip.name}' fades overlap — it ramps down before it finishes ramping up.`,
+							"fade_audio with shorter lengths.",
+							{ clipId: clip.id },
+						);
+					const asset = state.assets.find((entry) => entry.id === clip.assetId);
+					if (clip.assetId && !asset)
+						add(
+							"problem",
+							`'${clip.name}' points at media that is not in the library.`,
+							"replace_media, or remove_clips.",
+							{ clipId: clip.id },
+						);
+					else if (asset?.offline)
+						add(
+							"problem",
+							`'${clip.name}' is offline — it will render as background.`,
+							"import_media to relink the file.",
+							{ clipId: clip.id },
+						);
+				}
+			}
+
+			const hasPicture = timeline.tracks.some(
+				(track) => track.kind === "video" && track.clips.length > 0,
+			);
+			const hasSound = timeline.tracks.some(
+				(track) => track.kind === "audio" && track.clips.length > 0 && !track.muted,
+			);
+			if (hasPicture && !hasSound)
+				add(
+					"note",
+					"There is picture but no audible sound.",
+					"narrate_timeline, or add_clips.",
+				);
+			if (!hasPicture)
+				add(
+					"problem",
+					"Nothing on any video track — an export would be blank.",
+					"add_clips.",
+				);
+
+			const problems = findings.filter((entry) => entry.severity === "problem").length;
+			return ok({
+				findings,
+				problems,
+				notes: findings.length - problems,
+				note: problems
+					? `${problems} thing(s) would survive a clean render and be noticed on watching it back.`
+					: "Nothing that would spoil an export.",
+			});
+		},
+
+		project_stats() {
+			const used = new Set<string>();
+			let clips = 0;
+			let captions = 0;
+			for (const entry of state.timelines)
+				for (const track of entry.tracks)
+					for (const clip of track.clips) {
+						clips += 1;
+						if (clip.captionGroupId) captions += 1;
+						if (clip.assetId) used.add(clip.assetId);
+					}
+
+			const covered = timeline.tracks
+				.filter((track) => track.kind === "video")
+				.flatMap((track) => track.clips)
+				.reduce((sum, clip) => sum + (clip.endFrame - clip.startFrame), 0);
+			const total = computeTotalFrames(timeline);
+
+			return ok({
+				projectName: state.projectName,
+				timelines: state.timelines.map((entry) => ({
+					timelineId: entry.id,
+					name: entry.name,
+					tracks: entry.tracks.length,
+					clips: entry.tracks.reduce((sum, track) => sum + track.clips.length, 0),
+					durationSeconds: Number((computeTotalFrames(entry) / entry.fps).toFixed(2)),
+					active: entry.id === timeline.id,
+				})),
+				totals: {
+					clips,
+					captions,
+					comments: state.comments.length,
+					looks: state.looks.length,
+					workflows: state.workflows.length,
+				},
+				activeTimeline: {
+					frames: total,
+					durationSeconds: Number((total / timeline.fps).toFixed(2)),
+					// Coverage can exceed 1 when tracks are stacked; that is
+					// information, not an error, so it is not clamped.
+					pictureCoverage: total ? Number((covered / total).toFixed(2)) : 0,
+				},
+				media: {
+					total: state.assets.length,
+					used: used.size,
+					unused: state.assets.length - used.size,
+					offline: state.assets.filter((asset) => asset.offline).length,
+				},
+				note: "remove_unused_media clears what no timeline references; check_timeline reviews the cut.",
+			});
+		},
+
+		remove_unused_media(args) {
+			const keepOffline = args.keepOffline !== false;
+			const used = new Set<string>();
+			for (const entry of state.timelines)
+				for (const track of entry.tracks)
+					for (const clip of track.clips) if (clip.assetId) used.add(clip.assetId);
+
+			const unused = state.assets.filter(
+				(asset) => !used.has(asset.id) && !(keepOffline && asset.offline),
+			);
+			const describe = unused.map((asset) => ({
+				mediaRef: asset.id,
+				name: asset.name,
+				type: asset.type,
+				...(asset.offline ? { offline: true } : {}),
+			}));
+
+			if (args.confirm !== true)
+				return ok({
+					wouldRemove: describe,
+					count: describe.length,
+					keptOffline: keepOffline
+						? state.assets.filter((asset) => asset.offline && !used.has(asset.id))
+								.length
+						: 0,
+					note: "Nothing was removed. Pass confirm to do it — this is library state, so undo cannot bring an asset back.",
+				});
+
+			for (const asset of unused) api.removeAsset(asset.id);
+			return ok({
+				removed: describe,
+				count: describe.length,
+				note: "Gone from the library. Undo does not cover this.",
+			});
+		},
+
+		async view_frame(args) {
+			const frame = asNumber(args.frame);
+			if (frame === null) return fail("invalid_argument", "frame is required.");
+			const at = Math.max(0, Math.round(frame));
+			const maxEdge = Math.min(1920, Math.max(64, Math.round(asNumber(args.maxEdge) ?? 640)));
+			const rendered = await renderFrameToCanvas(
+				timeline,
+				state.assets,
+				at,
+				maxEdge,
+				overlays(),
+			);
+			if (!rendered) return fail("render_failed", `Frame ${at} couldn't be rendered.`);
+			return {
+				content: [
+					{
+						type: "image",
+						data: canvasToBase64Png(rendered.canvas),
+						mimeType: "image/png",
+					},
+					{
+						type: "text",
+						text: JSON.stringify(
+							{
+								frame: at,
+								seconds: Number((at / timeline.fps).toFixed(3)),
+								rendered: [rendered.width, rendered.height],
+								note: "The final composite, including cursor and webcam — what an export writes.",
+							},
+							null,
+							2,
+						),
+					},
+				],
+			};
+		},
+
+		async compare_frames(args) {
+			const a = asNumber(args.frameA);
+			const b = asNumber(args.frameB);
+			if (a === null || b === null)
+				return fail("invalid_argument", "frameA and frameB are both required.");
+			const maxEdge = Math.min(1920, Math.max(64, Math.round(asNumber(args.maxEdge) ?? 480)));
+
+			const render = async (frame: number) => {
+				const result = await renderFrameToCanvas(
+					timeline,
+					state.assets,
+					Math.max(0, Math.round(frame)),
+					maxEdge,
+					overlays(),
+				);
+				if (!result) return null;
+				const context = result.canvas.getContext("2d", { willReadFrequently: true });
+				if (!context) return null;
+				return {
+					canvas: result.canvas,
+					scopes: measureScopes(
+						context.getImageData(0, 0, result.width, result.height).data,
+					),
+				};
+			};
+
+			const first = await render(a);
+			const second = await render(b);
+			if (!first || !second)
+				return fail("render_failed", "One of those frames couldn't be rendered.");
+
+			const gap = compareScopes(first.scopes, second.scopes);
+			return {
+				content: [
+					{ type: "image", data: canvasToBase64Png(first.canvas), mimeType: "image/png" },
+					{
+						type: "image",
+						data: canvasToBase64Png(second.canvas),
+						mimeType: "image/png",
+					},
+					{
+						type: "text",
+						text: JSON.stringify(
+							{
+								frames: [Math.round(a), Math.round(b)],
+								difference: Number(sceneDistance(gap).toFixed(3)),
+								exposureGap: Number(gap.exposure.toFixed(3)),
+								contrastGap: Number(gap.contrast.toFixed(3)),
+								saturationGap: Number(gap.saturation.toFixed(3)),
+								warmCoolGap: Number(gap.warmCool.toFixed(3)),
+								note: "The first image is frameA. A gap near zero means these two frames match; the pictures are there for what a number cannot show.",
+							},
+							null,
+							2,
+						),
+					},
+				],
+			};
+		},
+
+		replace_media(args) {
+			const oldRef = asString(args.oldMediaRef);
+			const newRef = asString(args.newMediaRef);
+			if (!oldRef || !newRef)
+				return fail("invalid_argument", "oldMediaRef and newMediaRef are both required.");
+			if (oldRef === newRef) return ok({ changed: false, note: "Those are the same asset." });
+			const replacement = state.assets.find((entry) => entry.id === newRef);
+			if (!replacement) return fail("unknown_media", `No asset '${newRef}'.`);
+			if (replacement.offline)
+				return fail("media_offline", `'${replacement.name}' is offline — relink it first.`);
+
+			const only = stringList(args.clipIds);
+			const targets = timeline.tracks
+				.flatMap((track) => track.clips)
+				.filter(
+					(clip) =>
+						clip.assetId === oldRef && (only.length === 0 || only.includes(clip.id)),
+				);
+			if (targets.length === 0)
+				return fail(
+					"no_clips",
+					only.length
+						? "None of those clips use that asset."
+						: `No clip uses '${oldRef}'.`,
+				);
+
+			// A clip trimmed past the end of a shorter replacement shows its last
+			// frame for the remainder, which looks like a freeze nobody added.
+			const newFrames = Math.floor(replacement.durationSeconds * timeline.fps);
+			const tooShort = targets
+				.filter(
+					(clip) => clip.trimStartFrame + (clip.endFrame - clip.startFrame) > newFrames,
+				)
+				.map((clip) => clip.name);
+
+			const ids = targets.map((clip) => clip.id);
+			return mutate(
+				"Replace media",
+				(t) => mapClips(t, ids, (clip) => ({ ...clip, assetId: newRef })),
+				() => ({
+					replaced: ids.length,
+					from: oldRef,
+					to: replacement.name,
+					...(tooShort.length
+						? {
+								warnings: [
+									`'${replacement.name}' is ${(newFrames / timeline.fps).toFixed(1)}s, shorter than these clips need: ${[...new Set(tooShort)].join(", ")}. They will hold their last frame — trim_clips or set_clip_properties durationFrames fixes it.`,
+								],
+							}
+						: {}),
+					note: "Timing, grade, effects, transforms and keyframes were all kept.",
+				}),
+			);
+		},
+
+		async export_still_sequence(args) {
+			const end = computeTotalFrames(timeline);
+			const from = Math.max(0, Math.round(asNumber(args.startFrame) ?? 0));
+			const to = Math.min(end, Math.round(asNumber(args.endFrame) ?? end));
+			if (to <= from) return fail("invalid_argument", "endFrame must be after startFrame.");
+			const count = Math.min(24, Math.max(1, Math.round(asNumber(args.count) ?? 6)));
+
+			const step = (to - from) / count;
+			const made: Array<Record<string, unknown>> = [];
+			const failed: number[] = [];
+			for (let index = 0; index < count; index++) {
+				const frame = Math.round(from + step * index);
+				const rendered = await renderFrameToCanvas(
+					timeline,
+					state.assets,
+					frame,
+					undefined,
+					overlays(),
+				);
+				const blob = rendered ? await canvasToPngBlob(rendered.canvas) : null;
+				if (!blob) {
+					failed.push(frame);
+					continue;
+				}
+				const added = await api.importMedia([
+					new File([blob], `Still ${frame}.png`, { type: "image/png" }),
+				]);
+				if (added[0])
+					made.push({
+						mediaRef: added[0].id,
+						frame,
+						seconds: Number((frame / timeline.fps).toFixed(2)),
+					});
+				else failed.push(frame);
+			}
+
+			return ok({
+				stills: made,
+				requested: count,
+				...(failed.length ? { failedFrames: failed } : {}),
+				note: "Each still is a normal image asset — add_clips places them.",
 			});
 		},
 	};

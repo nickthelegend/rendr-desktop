@@ -87,7 +87,9 @@ export async function initializePixiApplicationWithTimeout(
 	const timeoutPromise = new Promise<never>((_, reject) => {
 		timeoutId = setTimeout(() => {
 			reject(
-				new Error(`Initialization timed out after ${timeoutMs}ms for ${backendLabel} renderer`),
+				new Error(
+					`Initialization timed out after ${timeoutMs}ms for ${backendLabel} renderer`,
+				),
 			);
 		}, timeoutMs);
 	});

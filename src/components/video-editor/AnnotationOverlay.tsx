@@ -90,7 +90,9 @@ export function AnnotationOverlay({
 			},
 			size: {
 				width: clampPercent((nextSceneWidth / Math.max(1, safeRecordingRect.width)) * 100),
-				height: clampPercent((nextSceneHeight / Math.max(1, safeRecordingRect.height)) * 100),
+				height: clampPercent(
+					(nextSceneHeight / Math.max(1, safeRecordingRect.height)) * 100,
+				),
 			},
 		};
 	};
