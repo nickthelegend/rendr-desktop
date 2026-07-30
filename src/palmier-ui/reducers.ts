@@ -271,14 +271,52 @@ export function setClipTextStyle(
 	});
 }
 
+/**
+ * Re-times a caption's words across its own span, length-weighted.
+ *
+ * Longer words genuinely take longer to say, so an even split drifts audibly
+ * on any real sentence. Frames are clip-relative, matching how captions store
+ * them, so the timing survives moving the clip.
+ */
+function retimeWords(
+	content: string,
+	durationFrames: number,
+): Array<{ text: string; startFrame: number; endFrame: number }> {
+	const tokens = content.split(/\s+/).filter(Boolean);
+	if (tokens.length === 0 || durationFrames <= 0) return [];
+
+	const totalChars = tokens.reduce((sum, token) => sum + token.length, 0);
+	let cursor = 0;
+	return tokens.map((token, index) => {
+		const share =
+			totalChars > 0
+				? (token.length / totalChars) * durationFrames
+				: durationFrames / tokens.length;
+		const startFrame = Math.round(cursor);
+		// The last word always lands exactly on the clip's end.
+		cursor = index === tokens.length - 1 ? durationFrames : cursor + share;
+		return { text: token, startFrame, endFrame: Math.round(cursor) };
+	});
+}
+
 export function setClipContent(
 	timeline: TimelineModel,
 	clipIds: readonly string[],
 	content: string,
 ): TimelineModel {
-	return mapClips(timeline, clipIds, (clip) =>
-		clip.mediaType === "text" ? { ...clip, content } : clip,
-	);
+	return mapClips(timeline, clipIds, (clip) => {
+		if (clip.mediaType !== "text") return clip;
+		// A caption carries per-word timing for the karaoke renderer. Changing
+		// the words without re-timing them leaves the highlight pointing at text
+		// that is no longer there, so an edited subtitle desyncs from what it
+		// says — and a word-count change breaks the per-word draw outright.
+		if (clip.captionWords === undefined) return { ...clip, content };
+		return {
+			...clip,
+			content,
+			captionWords: retimeWords(content, clip.endFrame - clip.startFrame),
+		};
+	});
 }
 
 export function setClipFlag(
