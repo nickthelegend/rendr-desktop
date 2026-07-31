@@ -266,6 +266,68 @@ one, and guessing which was wanted is how narration ends up out of step.
 
 ---
 
+## Recording a demo of another project
+
+The thing this exists for: you built something at a hackathon, it is 2am, and
+you do not want to record and edit a walkthrough by hand.
+
+Install the skill into the repo you want filmed:
+
+```bash
+npx degit nickthelegend/rendr-desktop/.claude/skills/rendr-demo .claude/skills/rendr-demo
+npm i -D playwright && npx playwright install chromium
+cp .claude/skills/rendr-demo/HACKATHON_DEMO.template.md HACKATHON_DEMO.md
+```
+
+Describe the video in `HACKATHON_DEMO.md` — plain English, no config:
+
+```markdown
+**App:** http://localhost:3000
+**Length:** about 75 seconds
+
+## Flow
+1. Land on the dashboard. Say this tracks carbon spend across a supply chain.
+2. Click into "Suppliers" and hover the worst row. Say scoring runs on ingest,
+   so it is current rather than nightly.
+3. Open a supplier, scroll to the emissions chart. Say this is the per-shipment
+   breakdown nobody else exposes.
+4. Click "Generate report". Say it produces an auditor-ready PDF in one step.
+```
+
+Start your app, have Rendr running, and ask:
+
+> Record my demo from HACKATHON_DEMO.md
+
+You get an MP4 with punch-in zooms that follow the cursor, a drawn pointer,
+spoken narration, and karaoke subtitles on a readable plate.
+
+**Nothing touches your mouse or records your screen.** Playwright drives a
+headless browser, and the pointer path is *authored* rather than captured — a
+script knows where it is about to click before it clicks, so the path is
+generated, eased, and handed to Rendr through `import_telemetry`. Rendr draws
+its own cursor and cuts zooms from that path exactly as it would from a native
+capture, because nothing downstream cares where the points came from.
+
+That makes it better than a real recording, not a compromise: the motion is
+smooth by construction, nothing shakes, and none of your desktop is in frame.
+
+Under the hood it is two commands, and you can run them yourself:
+
+```bash
+node .claude/skills/rendr-demo/scripts/record-demo.mjs demos/my-app.json demo-out
+node .claude/skills/rendr-demo/scripts/build-demo.mjs demo-out --export
+```
+
+`RENDR_CAPTIONS` picks the subtitle look — `plate` (default), `karaoke`,
+`shorts`, `pop`, `typewriter`, `clean`, `emphasis`. `RENDR_VOICE` picks the
+Kokoro voice.
+
+Two things decide whether the result is watchable, and both are handled for
+you: a beat is held for at least as long as its narration takes to speak, or
+the caption and narration tracks stack and the lower clip of each pair never
+renders; and the pointer is kept moving toward whatever is on screen, or every
+zoom shares one focus point and the whole video punches into the same spot.
+
 ## Review speed
 
 A continuous bar in the transport, 0.25×–4×, rather than 1×/2× presets — the rate

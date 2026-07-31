@@ -10,12 +10,48 @@ walkthrough by hand. This turns a storyboard file into a finished MP4: punch-in
 zooms that follow the cursor, a drawn pointer, spoken narration, word-timed
 subtitles.
 
+## Using it in a project
+
+Install once, in whatever repo you want to film:
+
 ```bash
-node scripts/record-demo.mjs demos/my-app.json demo-out
-node scripts/build-demo.mjs demo-out --export
+npx degit nickthelegend/rendr-desktop/.claude/skills/rendr-demo .claude/skills/rendr-demo
+npm i -D playwright && npx playwright install chromium
+cp .claude/skills/rendr-demo/HACKATHON_DEMO.template.md HACKATHON_DEMO.md
 ```
 
-Rendr must be running (`npm run dev`), serving MCP on `127.0.0.1:19790`.
+Write the flow in `HACKATHON_DEMO.md` in plain English, start the app you want
+filmed, then ask:
+
+> Record my demo from HACKATHON_DEMO.md
+
+Rendr itself must be running (`npm run dev` in the rendr-desktop checkout),
+serving MCP on `127.0.0.1:19790`. It is the editor — it does not need to be the
+project being filmed.
+
+## What to do when asked
+
+1. **Read `HACKATHON_DEMO.md`.** It is prose, not config: an app URL, a rough
+   length, and a numbered flow of what should happen and what should be said.
+2. **Check the app is up.** Curl the URL. If it is not running, say so and stop
+   — do not record a connection-refused page.
+3. **Turn it into a storyboard.** One beat per numbered step. The `say` is the
+   narration for that step, rewritten to be spoken rather than read: short
+   sentences, no bullet fragments, no markdown. The `do` is the steps that make
+   it happen.
+4. **Find the real selectors** before writing them. Open the page and look —
+   `read_page` or a Playwright evaluate. Guessed selectors are the main reason a
+   run comes back with beats skipped.
+5. **Record, build, export**, then check the exported file and report where it
+   landed.
+
+Write the storyboard to `demos/<name>.json` so a re-run does not start over.
+
+```bash
+node .claude/skills/rendr-demo/scripts/record-demo.mjs demos/my-app.json demo-out
+node .claude/skills/rendr-demo/scripts/build-demo.mjs demo-out --export
+```
+
 See [reference/mcp.md](reference/mcp.md) for the call helper and the tool list.
 
 ## The thing to understand first
@@ -38,8 +74,10 @@ construction, nothing shakes, and no desktop is in frame.
 
 ## The storyboard
 
-One file describes the whole video. Beats are what gets said; steps are what
-happens on screen.
+`HACKATHON_DEMO.md` compiles to this. Beats are what gets said; steps are what
+happens on screen. Write it out even when the source was prose — it is the
+artefact that makes a re-run reproducible, and the thing to edit when one beat
+is wrong rather than re-deriving the lot.
 
 ```json
 {
@@ -137,6 +175,18 @@ rather than silently doing nothing.
   renders frame 0.
 - A black rendered frame almost always means the asset is offline, not that the
   renderer failed. Check `get_media` for `offline: true`.
+
+## Writing the narration
+
+The `say` lines are spoken, so they have to survive being heard once with no
+ability to re-read. Short sentences. One idea each. Expand initialisms the way
+they are said — "M C P", not "MCP", or Kokoro runs them together. No brackets,
+no lists, no markdown; it all gets read literally.
+
+Say what the thing does and why it matters, not what is on screen. "Here is the
+dashboard" is wasted narration when the viewer can see the dashboard. "The
+scoring is computed on ingest, so this is current" is the sentence a judge
+remembers.
 
 ## Verify before claiming it worked
 
