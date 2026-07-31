@@ -3117,7 +3117,7 @@ export const FINISH_TOOLS: AgentTool[] = [
 	{
 		name: "style_captions",
 		description:
-			"Restyle a whole caption group in one action. Captions are many short clips, so update_text on each is impractical and drifts — one missed clip and a word changes font mid-sentence. Sets font, size, colour, weight, alignment, and case across every clip in the group at once. Use get_timeline to see the caption groups; omit groupId to restyle every caption on the timeline.",
+			"Restyle a whole caption group in one action. Captions are many short clips, so update_text on each is impractical and drifts — one missed clip and a word changes font mid-sentence. Sets font, size, colour, weight, alignment, case, animation, and the active-word highlight across every clip in the group at once. Use get_timeline to see the caption groups; omit groupId to restyle every caption on the timeline.\n\nA preset is the fast way in: 'karaoke' lights each word as it is spoken, 'shorts' is the heavy yellow-highlight look short-form video uses, 'pop' scales each word in on its own beat, 'typewriter' reveals character by character, 'clean' is a quiet fade with no per-word motion, and 'emphasis' keeps the line still but colours the word being said. A preset sets several fields at once; anything you pass alongside it wins, so preset 'shorts' with color '#FFFFFF' gives the shorts layout in white.\n\nPer-word animations need word timings, which narrate_timeline writes and imported SRT files do not always carry. Without them a word-level preset degrades to a whole-line fade rather than failing.",
 		inputSchema: object({
 			groupId: {
 				type: "string",
@@ -3130,6 +3130,23 @@ export const FINISH_TOOLS: AgentTool[] = [
 			italic: { type: "boolean" },
 			uppercase: { type: "boolean" },
 			alignment: { type: "string", enum: ["left", "center", "right"] },
+			preset: {
+				type: "string",
+				enum: ["karaoke", "shorts", "pop", "typewriter", "clean", "emphasis"],
+				description:
+					"A whole look in one word. Applied first, so any explicit field you pass overrides it.",
+			},
+			animation: {
+				type: "string",
+				enum: ["off", "fade", "slide_up", "pop", "typewriter", "word_by_word", "karaoke"],
+				description:
+					"How the line arrives. 'karaoke' and 'word_by_word' are per-word and need word timings; the rest animate the whole line.",
+			},
+			highlightColor: {
+				type: "string",
+				description:
+					"Hex colour for the word currently being spoken, used by karaoke and word_by_word. This is what makes a caption readable as speech rather than as a block of text.",
+			},
 		}),
 	},
 	{

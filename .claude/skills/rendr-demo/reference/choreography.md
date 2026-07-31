@@ -1,3 +1,12 @@
+# Choreography
+
+> Superseded in part: the real-pointer timings below described driving the OS
+> mouse, which this skill no longer does. What still holds is the *shape* of a
+> beat — travel, settle, act, rest — because that is what the dwell detector
+> reads, and it reads an authored path exactly the same way it read a captured
+> one. The numbers are now enforced by scripts/record-demo.mjs rather than typed
+> out by hand.
+
 # Choreographing a take that edits itself well
 
 Rendr cuts zooms from what the pointer did. So the recording is a performance,

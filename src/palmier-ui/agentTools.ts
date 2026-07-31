@@ -349,6 +349,41 @@ const neutralGrade = (): ClipModel["color"] => ({
 });
 
 /**
+ * Caption looks, as whole presets.
+ *
+ * Every one of these is expressible through TextStyle, which both the preview
+ * and the encoder already animate — so a variation is a different set of
+ * values, never a different rendering path, and none of them can disagree
+ * between what you see and what you export.
+ *
+ * The per-word entries need caption word timings. narrate_timeline writes them;
+ * an imported SRT may not have them, and the renderer falls back to animating
+ * the whole line rather than showing nothing.
+ */
+const CAPTION_PRESETS: Record<string, Record<string, unknown>> = {
+	// Each word lights as it is said. The default, because it is the one that
+	// makes a caption readable as speech rather than as a wall of text.
+	karaoke: { animation: "karaoke", highlightColor: "#FFE14D", bold: true },
+	// The short-form look: heavy, tight, one word hot at a time.
+	shorts: {
+		animation: "karaoke",
+		highlightColor: "#FFE14D",
+		bold: true,
+		uppercase: true,
+		fontSize: 64,
+		tracking: 2,
+	},
+	// Words scale in on their own beat. Livelier than karaoke, busier too.
+	pop: { animation: "pop", bold: true, highlightColor: "#FFFFFF" },
+	typewriter: { animation: "typewriter", bold: false },
+	// Quiet: the line fades in whole and stays out of the way.
+	clean: { animation: "fade", bold: false, uppercase: false, highlightColor: "#FFFFFF" },
+	// The line sits still and only the colour moves, which reads calmer than
+	// karaoke on dense footage where motion competes with the picture.
+	emphasis: { animation: "word_by_word", highlightColor: "#7CD4FD", bold: true },
+};
+
+/**
  * Typography and placement per title kind.
  *
  * These are the difference between add_title and add_texts: the same words,
@@ -434,6 +469,9 @@ function sceneDistance(gap: ReturnType<typeof compareScopes>): number {
 			chroma * 0.4,
 	);
 }
+
+/** Everything TextStyle.animation accepts, for validating an agent's string. */
+const TEXT_ANIMATIONS = ["off", "fade", "slide_up", "pop", "typewriter", "word_by_word", "karaoke"];
 
 /** `clipIds`-style arguments, filtered to the strings that are actually there. */
 const stringList = (value: unknown): string[] =>
@@ -6807,8 +6845,43 @@ export function createAgentTools(api: EditorApi) {
 					return fail("invalid_argument", `Unknown alignment '${alignment}'.`);
 				patch.alignment = alignment;
 			}
-			if (Object.keys(patch).length === 0)
-				return fail("invalid_argument", "Pass at least one style property to change.");
+			const animation = asString(args.animation);
+			if (animation) {
+				if (!TEXT_ANIMATIONS.includes(animation))
+					return fail(
+						"invalid_argument",
+						`Unknown animation '${animation}'. One of ${TEXT_ANIMATIONS.join(", ")}.`,
+					);
+				patch.animation = animation;
+			}
+			const highlight = asString(args.highlightColor);
+			if (highlight) {
+				if (!/^#[0-9a-fA-F]{6}$/.test(highlight))
+					return fail(
+						"invalid_argument",
+						`highlightColor must be a hex like '#FFE14D', not '${highlight}'.`,
+					);
+				patch.highlightColor = highlight.toUpperCase();
+			}
+
+			const presetName = asString(args.preset);
+			let applied = patch;
+			if (presetName) {
+				const preset = CAPTION_PRESETS[presetName];
+				if (!preset)
+					return fail(
+						"invalid_argument",
+						`Unknown preset '${presetName}'. One of ${Object.keys(CAPTION_PRESETS).join(", ")}.`,
+					);
+				// Preset underneath, explicit arguments on top — so a caller can
+				// take a whole look and still override one thing about it.
+				applied = { ...preset, ...patch };
+			}
+			if (Object.keys(applied).length === 0)
+				return fail(
+					"invalid_argument",
+					"Pass a preset, or at least one style property to change.",
+				);
 
 			// Every clip in the group at once: restyling them one at a time is
 			// what leaves one word in the old font halfway through a sentence.
@@ -6821,13 +6894,31 @@ export function createAgentTools(api: EditorApi) {
 			if (targets.length === 0)
 				return ok({ changed: false, note: "That group has no clips." });
 
+			// A per-word look needs word timings; without them the renderer
+			// animates the whole line instead, which is a quieter result than
+			// the caller asked for and worth saying rather than hiding.
+			const perWord = applied.animation === "karaoke" || applied.animation === "word_by_word";
+			const timed = timeline.tracks
+				.flatMap((track) => track.clips)
+				.filter(
+					(clip) => targets.includes(clip.id) && (clip.captionWords?.length ?? 0) > 0,
+				);
+
 			return mutate(
 				"Style captions",
-				(t) => setClipTextStyle(t, targets, patch),
+				(t) => setClipTextStyle(t, targets, applied),
 				() => ({
 					styled: targets.length,
 					groups: wanted ? [wanted] : groups,
-					applied: patch,
+					...(presetName ? { preset: presetName } : {}),
+					applied,
+					...(perWord && timed.length === 0
+						? {
+								warnings: [
+									`'${applied.animation}' is a per-word animation and none of these captions carry word timings, so they will animate as whole lines. narrate_timeline writes the timings; add_captions from an SRT may not.`,
+								],
+							}
+						: {}),
 				}),
 			);
 		},

@@ -115,11 +115,19 @@ async function main() {
 	const measured = await call("inspect_color", { clipId });
 	const luma = measured.scopes?.meanLuma ?? 0;
 	const onLight = luma > 0.55;
-	await call("style_captions", {
+	// Karaoke by default: the word being spoken is lit, which is what makes a
+	// caption readable as speech rather than as a block of text arriving whole.
+	// RENDR_CAPTIONS picks another look — shorts, pop, typewriter, clean,
+	// emphasis — without touching this script.
+	const styled = await call("style_captions", {
+		preset: process.env.RENDR_CAPTIONS ?? "karaoke",
 		color: onLight ? "#101418" : "#FFFFFF",
-		bold: true,
+		highlightColor: onLight ? "#B45309" : "#FFE14D",
 	});
-	say(`captions   ${onLight ? "dark" : "light"} text (footage reads ${luma.toFixed(2)} luma)`);
+	say(
+		`captions   ${styled.preset ?? "custom"}, ${onLight ? "dark" : "light"} text (footage reads ${luma.toFixed(2)} luma)`,
+	);
+	for (const warning of styled.warnings ?? []) say(`  ! ${warning}`);
 	say(`narration  ${narration.spoken} lines, subtitles on the CC track`);
 	for (const over of narration.overruns ?? []) {
 		say(`  ! "${(over.text ?? "").slice(0, 48)}…" runs ${over.overrunSeconds}s past the next line`);

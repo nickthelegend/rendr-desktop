@@ -69,7 +69,10 @@ class Recorder {
 		this.size = size;
 		this.points = [];
 		this.beats = [];
-		this.at = { x: size.width / 2, y: size.height * 0.9 };
+		// Upper-middle of the content. The old default was the bottom edge,
+		// which put every telemetry sample at cy ~0.95 — so every zoom focused
+		// on the bottom of the frame and read as "it only zooms to the centre".
+		this.at = { x: size.width * 0.5, y: size.height * 0.42 };
 		this.t0 = Date.now();
 	}
 
@@ -150,6 +153,42 @@ class Recorder {
 	}
 }
 
+/**
+ * Something worth pointing at, near the middle of what is currently on screen.
+ *
+ * This is what makes a zoom land somewhere meaningful without the storyboard
+ * having to name a selector for every beat. A demo that scrolls and talks has
+ * no click to key on, so without this the pointer never moves, every dwell
+ * shares one focus point, and all the punch-ins land on the same spot.
+ *
+ * Headings and links are preferred because they are what a viewer's eye goes to
+ * anyway, and the one closest to the centre of the viewport is the one the
+ * scroll just brought into view.
+ */
+async function somethingToLookAt(rec, avoid) {
+	const found = await rec.page.evaluate(
+		({ avoidX, avoidY }) => {
+			const wanted = "h1, h2, h3, article a, main a, [role=heading], button, td a, li a";
+			const midY = window.innerHeight / 2;
+			const seen = [];
+			for (const node of document.querySelectorAll(wanted)) {
+				const box = node.getBoundingClientRect();
+				if (box.width < 40 || box.height < 12) continue;
+				if (box.top < 60 || box.bottom > window.innerHeight - 40) continue;
+				const x = box.left + box.width / 2;
+				const y = box.top + box.height / 2;
+				// Not the thing we are already on, or the zoom does not move.
+				if (Math.abs(x - avoidX) < 60 && Math.abs(y - avoidY) < 40) continue;
+				seen.push({ x, y, score: Math.abs(y - midY) });
+			}
+			seen.sort((a, b) => a.score - b.score);
+			return seen[0] ? { x: seen[0].x, y: seen[0].y } : null;
+		},
+		{ avoidX: avoid.x, avoidY: avoid.y },
+	);
+	return found;
+}
+
 async function runStep(rec, step) {
 	const page = rec.page;
 
@@ -171,6 +210,12 @@ async function runStep(rec, step) {
 			await page.mouse.wheel(0, total / steps);
 			rec.mark(rec.at.x, rec.at.y);
 			await page.waitForTimeout(SAMPLE_MS);
+		}
+		// Follow the content that just arrived, so the rest after a scroll has
+		// somewhere real to be rather than wherever the last beat abandoned it.
+		if (step.follow !== false) {
+			const target = await somethingToLookAt(rec, rec.at);
+			if (target) await rec.glideTo(target.x, target.y, 520);
 		}
 		return;
 	}
@@ -259,8 +304,24 @@ async function main() {
 		// actions finished sooner, hold — otherwise the next beat starts while
 		// this line is still speaking, and both the narration and the captions
 		// end up stacked on top of each other.
-		const short = needed - (rec.now - startMs);
-		if (short > 0) await rec.dwell(short);
+		//
+		// The hold is spent looking at things rather than sitting still. A beat
+		// that only pauses would otherwise leave the pointer exactly where the
+		// last one left it, and every zoom in the video would share one focus
+		// point — which is precisely how "it only zooms to the centre" happens.
+		let short = needed - (rec.now - startMs);
+		while (short > 0) {
+			const target = beat.stay === true ? null : await somethingToLookAt(rec, rec.at);
+			if (!target) {
+				await rec.dwell(short);
+				break;
+			}
+			const before = rec.now;
+			await rec.glideTo(target.x, target.y, 600);
+			// Rest long enough to register, but inside the 2600 ms ceiling.
+			await rec.dwell(Math.min(1900, Math.max(600, short - (rec.now - before))));
+			short = needed - (rec.now - startMs);
+		}
 		rec.beats.push({
 			index,
 			startMs,
