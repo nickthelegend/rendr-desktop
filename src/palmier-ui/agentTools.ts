@@ -381,6 +381,18 @@ const CAPTION_PRESETS: Record<string, Record<string, unknown>> = {
 	// The line sits still and only the colour moves, which reads calmer than
 	// karaoke on dense footage where motion competes with the picture.
 	emphasis: { animation: "word_by_word", highlightColor: "#7CD4FD", bold: true },
+	// The safe one. A scrim behind the text means the caption does not depend
+	// on the footage being a brightness that suits it.
+	plate: {
+		animation: "karaoke",
+		highlightColor: "#FFE14D",
+		color: "#FFFFFF",
+		bold: true,
+		backgroundColor: "#000000",
+		backgroundOpacity: 0.66,
+		backgroundPadding: 0.4,
+		backgroundRadius: 0.28,
+	},
 };
 
 /**
@@ -6854,6 +6866,33 @@ export function createAgentTools(api: EditorApi) {
 					);
 				patch.animation = animation;
 			}
+			const plate = asString(args.backgroundColor);
+			if (plate) {
+				if (plate.toLowerCase() === "none") {
+					// Explicitly cleared rather than left undefined, or the merge
+					// below would keep whatever plate was already there.
+					patch.backgroundColor = undefined;
+				} else if (!/^#[0-9a-fA-F]{6}$/.test(plate)) {
+					return fail(
+						"invalid_argument",
+						`backgroundColor must be a hex like '#000000' or 'none', not '${plate}'.`,
+					);
+				} else {
+					patch.backgroundColor = plate.toUpperCase();
+				}
+			}
+			for (const key of [
+				"backgroundOpacity",
+				"backgroundPadding",
+				"backgroundRadius",
+			] as const) {
+				const value = asNumber(args[key]);
+				if (value === null) continue;
+				if (value < 0 || value > 1)
+					return fail("invalid_argument", `${key} must be between 0 and 1.`);
+				patch[key] = value;
+			}
+
 			const highlight = asString(args.highlightColor);
 			if (highlight) {
 				if (!/^#[0-9a-fA-F]{6}$/.test(highlight))

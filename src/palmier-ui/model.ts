@@ -86,6 +86,21 @@ export interface TextStyle {
 	alignment: "left" | "center" | "right";
 	animation: TextAnimation;
 	highlightColor: string;
+	/**
+	 * A filled plate behind the text.
+	 *
+	 * Absent means no plate, which is the historical behaviour. This is the
+	 * only thing that makes a caption reliably readable over footage the editor
+	 * does not control — white text vanishes on a docs site, dark text vanishes
+	 * on a dark app, and a plate stops the question from mattering.
+	 */
+	backgroundColor?: string;
+	/** 0–1. Absent means fully opaque when a colour is set. */
+	backgroundOpacity?: number;
+	/** Padding around the text, as a fraction of the font size. Default 0.35. */
+	backgroundPadding?: number;
+	/** Corner radius, as a fraction of the plate's height. Default 0.25. */
+	backgroundRadius?: number;
 }
 
 /** Recordly's zoom region, plus the focus point its camera reads. */

@@ -395,6 +395,64 @@ export async function renderFrame(
 			context.translate(boxW / 2, boxH / 2 + anim.offsetY * boxH);
 			context.scale(anim.scale, anim.scale);
 
+			// The plate is drawn first, sized from the text that is about to go on
+			// top of it. Both branches need it, so the measurement happens here
+			// rather than being duplicated inside each.
+			if (style?.backgroundColor) {
+				const cased2 = cased;
+				const perWordNow = isPerWord(preset) && anim.words.length > 0;
+				const spaceW = context.measureText(" ").width;
+				let plateW: number;
+				let plateLines: number;
+				if (perWordNow) {
+					const ws = anim.words.map((w) => context.measureText(cased2(w.text)).width);
+					plateW = ws.reduce((a, b) => a + b, 0) + spaceW * Math.max(0, ws.length - 1);
+					plateLines = 1;
+				} else {
+					const text = cased2(anim.visibleText ?? clip.content ?? "");
+					const rows = text.split("\n");
+					plateW = Math.max(...rows.map((row) => context.measureText(row).width), 0);
+					plateLines = rows.length;
+				}
+				if (plateW > 0) {
+					const pad = size * (style.backgroundPadding ?? 0.35);
+					const lineHeight = size * 1.15;
+					const h = lineHeight * plateLines + pad * 2 - size * 0.15;
+					const w = plateW + pad * 2;
+					const originX =
+						style.alignment === "left"
+							? -boxW / 2 - pad
+							: style.alignment === "right"
+								? boxW / 2 - w + pad
+								: -w / 2;
+					const originY = -h / 2;
+					const radius = Math.min(h / 2, h * (style.backgroundRadius ?? 0.25));
+					const previousAlpha = context.globalAlpha;
+					context.globalAlpha = opacity * anim.opacity * (style.backgroundOpacity ?? 1);
+					context.fillStyle = style.backgroundColor;
+					context.beginPath();
+					// roundRect is not everywhere; the manual path keeps the
+					// encoder and the preview drawing the same shape.
+					context.moveTo(originX + radius, originY);
+					context.lineTo(originX + w - radius, originY);
+					context.quadraticCurveTo(originX + w, originY, originX + w, originY + radius);
+					context.lineTo(originX + w, originY + h - radius);
+					context.quadraticCurveTo(
+						originX + w,
+						originY + h,
+						originX + w - radius,
+						originY + h,
+					);
+					context.lineTo(originX + radius, originY + h);
+					context.quadraticCurveTo(originX, originY + h, originX, originY + h - radius);
+					context.lineTo(originX, originY + radius);
+					context.quadraticCurveTo(originX, originY, originX + radius, originY);
+					context.closePath();
+					context.fill();
+					context.globalAlpha = previousAlpha;
+				}
+			}
+
 			if (isPerWord(preset) && anim.words.length > 0) {
 				// Word-by-word is laid out by hand: each word carries its own
 				// colour and opacity, so one fillText can't draw the line.

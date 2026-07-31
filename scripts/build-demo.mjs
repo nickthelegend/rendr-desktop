@@ -18,7 +18,10 @@ let id = 0;
 async function call(name, args = {}) {
 	const response = await fetch(MCP, {
 		method: "POST",
-		headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+		headers: {
+			"Content-Type": "application/json",
+			Accept: "application/json, text/event-stream",
+		},
 		body: JSON.stringify({
 			jsonrpc: "2.0",
 			id: ++id,
@@ -106,7 +109,9 @@ async function main() {
 		}
 	}
 
-	const narration = await call("narrate_timeline", { voice: process.env.RENDR_VOICE ?? "af_heart" });
+	const narration = await call("narrate_timeline", {
+		voice: process.env.RENDR_VOICE ?? "af_heart",
+	});
 
 	// Captions default to white, which is invisible over a light page — and a
 	// light page is exactly what a docs site or a GitHub repo is. So measure the
@@ -115,22 +120,22 @@ async function main() {
 	const measured = await call("inspect_color", { clipId });
 	const luma = measured.scopes?.meanLuma ?? 0;
 	const onLight = luma > 0.55;
-	// Karaoke by default: the word being spoken is lit, which is what makes a
-	// caption readable as speech rather than as a block of text arriving whole.
-	// RENDR_CAPTIONS picks another look — shorts, pop, typewriter, clean,
-	// emphasis — without touching this script.
+	// A plate by default: white text on a dark scrim, with the spoken word lit.
+	// Picking a caption colour from the footage's average brightness is a guess
+	// that fails on any shot that is light in one half and dark in the other,
+	// and it was already failing outright between preview and export. A plate
+	// removes the question — the caption sits on its own background and does
+	// not care what is behind it. RENDR_CAPTIONS picks another look.
 	const styled = await call("style_captions", {
-		preset: process.env.RENDR_CAPTIONS ?? "karaoke",
-		color: onLight ? "#101418" : "#FFFFFF",
-		highlightColor: onLight ? "#B45309" : "#FFE14D",
+		preset: process.env.RENDR_CAPTIONS ?? "plate",
 	});
-	say(
-		`captions   ${styled.preset ?? "custom"}, ${onLight ? "dark" : "light"} text (footage reads ${luma.toFixed(2)} luma)`,
-	);
+	say(`captions   ${styled.preset ?? "custom"} (footage reads ${luma.toFixed(2)} luma)`);
 	for (const warning of styled.warnings ?? []) say(`  ! ${warning}`);
 	say(`narration  ${narration.spoken} lines, subtitles on the CC track`);
 	for (const over of narration.overruns ?? []) {
-		say(`  ! "${(over.text ?? "").slice(0, 48)}…" runs ${over.overrunSeconds}s past the next line`);
+		say(
+			`  ! "${(over.text ?? "").slice(0, 48)}…" runs ${over.overrunSeconds}s past the next line`,
+		);
 	}
 
 	const check = await call("check_timeline", { severity: "problems" });

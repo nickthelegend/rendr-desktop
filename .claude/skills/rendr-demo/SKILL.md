@@ -103,12 +103,13 @@ look:
 
 | preset | what it is |
 |---|---|
-| `karaoke` | each word lights as it is spoken — the default |
+| `karaoke` | each word lights as it is spoken, no background |
 | `shorts` | heavy uppercase with a yellow hot word, the short-form look |
 | `pop` | words scale in on their own beat |
 | `typewriter` | character by character |
 | `clean` | quiet whole-line fade, no per-word motion |
 | `emphasis` | line stays still, only the colour moves |
+| `plate` | white text on a dark rounded scrim — the default |
 
 `RENDR_CAPTIONS=shorts node scripts/build-demo.mjs demo-out` switches it.
 
@@ -120,11 +121,13 @@ rather than silently doing nothing.
 
 - **Google serves a reCAPTCHA to headless browsers.** So do some other large
   sites. Do not attempt to solve it — point the demo at the user's own app.
-- **Captions are white by default and a docs site is white.** `build-demo.mjs`
-  measures the footage with `inspect_color` and picks a contrasting colour, and
-  storyboards default to `colorScheme: "dark"`. Known bug: on light footage the
-  preview renders the dark caption correctly but the export still comes out
-  light — preview and export disagree. Dark footage avoids it.
+- **Bare text captions depend on the footage's brightness.** White text vanishes
+  on a docs site, dark text vanishes on a dark app, and picking a colour from
+  the shot's average brightness fails on anything light in one half and dark in
+  the other. The `plate` preset — a dark rounded scrim behind the text — is the
+  default for exactly this reason, and it also sidesteps an unresolved bug where
+  preview and export disagreed about a dark caption colour on light footage.
+  Use `backgroundColor: "none"` for bare text when the footage is controlled.
 - **Comments live on the project, not the timeline.** An earlier demo's script
   is still there and `narrate_timeline` will happily speak it over the new one.
   `build-demo.mjs` clears them first.

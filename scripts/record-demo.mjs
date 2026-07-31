@@ -17,7 +17,7 @@
 //
 // Writes outdir/demo.webm, outdir/telemetry.json and outdir/script.json.
 
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { chromium } from "playwright";
@@ -52,7 +52,10 @@ const WORDS_PER_SECOND = 2.5;
 const LINE_TAIL_MS = 700;
 
 function speechMs(text) {
-	const words = String(text ?? "").trim().split(/\s+/).filter(Boolean).length;
+	const words = String(text ?? "")
+		.trim()
+		.split(/\s+/)
+		.filter(Boolean).length;
 	return words === 0 ? 0 : (words / WORDS_PER_SECOND) * 1000 + LINE_TAIL_MS;
 }
 
