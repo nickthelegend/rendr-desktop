@@ -3299,6 +3299,50 @@ export const FINISH_TOOLS: AgentTool[] = [
 	},
 ];
 
+/**
+ * Driving a demo without a physical pointer.
+ *
+ * Rendr's zooms are cut from cursor telemetry, which normally only a native
+ * capture can produce. A headless browser has no OS pointer — but it knows
+ * exactly where it clicked, so the path can be supplied instead of observed.
+ * Everything downstream is unchanged, because none of it cares where the
+ * points came from.
+ */
+export const HEADLESS_TOOLS: AgentTool[] = [
+	{
+		name: "import_telemetry",
+		description:
+			"Supply the cursor path for a recording made without a physical mouse — a headless browser run, a remote session, or any capture where the OS pointer was never involved. Rendr draws its cursor from this and cuts zooms from it, so a video imported with telemetry behaves exactly like one Rendr captured itself: suggest_zooms finds the clicks and the dwells, the drawn cursor follows the path with its spring smoothing, and trim_dead_air can see where nothing was happening.\n\nPoints are {timeMs, cx, cy} with cx and cy normalized 0–1 across the frame, plus an optional interactionType of 'move' or 'click'. Supply a point every 30–60 ms through a movement: the drawn cursor interpolates, but zoom detection reads dwell from consecutive samples, so a path with only its endpoints reads as an instant teleport and produces no zooms.\n\nReplaces the whole track rather than appending — a project has one pointer.",
+		inputSchema: object(
+			{
+				points: {
+					type: "array",
+					description: "The path, in time order. Out-of-order points are sorted.",
+					items: {
+						type: "object",
+						properties: {
+							timeMs: {
+								type: "number",
+								description: "Milliseconds from the start of the recording.",
+							},
+							cx: { type: "number", description: "0–1 across the frame." },
+							cy: { type: "number", description: "0–1 down the frame." },
+							interactionType: {
+								type: "string",
+								enum: ["move", "click", "double-click", "right-click", "mouseup"],
+								description:
+									"Default 'move'. A 'click' is what suggest_zooms treats as an explicit zoom candidate.",
+							},
+						},
+						required: ["timeMs", "cx", "cy"],
+					},
+				},
+			},
+			["points"],
+		),
+	},
+];
+
 /** Everything the MCP server advertises. */
 export const MCP_TOOLS: AgentTool[] = [
 	...EDITING_TOOLS,
@@ -3314,6 +3358,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...MOTION_TOOLS,
 	...AUDIO_TOOLS,
 	...FINISH_TOOLS,
+	...HEADLESS_TOOLS,
 ];
 
 export const TOOLS_BY_NAME = new Map(MCP_TOOLS.map((tool) => [tool.name, tool]));

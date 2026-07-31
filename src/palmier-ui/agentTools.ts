@@ -8,6 +8,7 @@
 // Tools that have no engine behind them still return `not_implemented` — see
 // registry.ts. Nothing here fakes a success.
 
+import type { CursorTelemetryPoint } from "@/components/video-editor/types";
 import {
 	BEAT_CONFIDENCE_FLOOR,
 	detectBeats,
@@ -7419,6 +7420,63 @@ export function createAgentTools(api: EditorApi) {
 				requested: count,
 				...(failed.length ? { failedFrames: failed } : {}),
 				note: "Each still is a normal image asset — add_clips places them.",
+			});
+		},
+
+		import_telemetry(args) {
+			const raw = asArray(args.points);
+			if (raw.length === 0)
+				return fail("invalid_argument", "points must be a non-empty array.");
+			if (raw.length > 200000)
+				return fail("invalid_argument", "That is more points than a recording can carry.");
+
+			const points: CursorTelemetryPoint[] = [];
+			for (const entry of raw as Array<Record<string, unknown>>) {
+				const timeMs = asNumber(entry.timeMs);
+				const cx = asNumber(entry.cx);
+				const cy = asNumber(entry.cy);
+				if (timeMs === null || cx === null || cy === null) continue;
+				if (!Number.isFinite(timeMs) || !Number.isFinite(cx) || !Number.isFinite(cy))
+					continue;
+				const kind = asString(entry.interactionType);
+				points.push({
+					timeMs: Math.max(0, timeMs),
+					// Clamped rather than dropped: a click a pixel outside the
+					// viewport is a real click, and dropping it loses a zoom.
+					cx: Math.min(1, Math.max(0, cx)),
+					cy: Math.min(1, Math.max(0, cy)),
+					interactionType: (kind ?? "move") as CursorTelemetryPoint["interactionType"],
+				});
+			}
+			if (points.length === 0)
+				return fail(
+					"invalid_argument",
+					"No point had a usable timeMs, cx and cy. cx and cy are 0–1 fractions of the frame, not pixels.",
+				);
+
+			points.sort((a, b) => a.timeMs - b.timeMs);
+			const clicks = points.filter((point) => point.interactionType === "click").length;
+			const span = points[points.length - 1].timeMs - points[0].timeMs;
+			// A path sampled too coarsely reads as teleporting: the dwell
+			// detector compares consecutive samples, so it sees one huge jump
+			// rather than a rest, and produces no zooms at all.
+			const gaps = points.slice(1).map((point, index) => point.timeMs - points[index].timeMs);
+			const worst = gaps.length ? Math.max(...gaps) : 0;
+
+			api.setCursorTelemetry(points);
+			return ok({
+				points: points.length,
+				clicks,
+				durationMs: Math.round(span),
+				dropped: raw.length - points.length,
+				...(worst > 400
+					? {
+							warnings: [
+								`The largest gap between samples is ${Math.round(worst)} ms. Zoom detection compares consecutive samples, so a gap that long reads as a teleport rather than a movement or a rest — sample every 30–60 ms through a move.`,
+							],
+						}
+					: {}),
+				note: "suggest_zooms reads this now, and the drawn cursor follows it. It replaced any previous path.",
 			});
 		},
 	};

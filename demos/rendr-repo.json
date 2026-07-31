@@ -1,0 +1,75 @@
+{
+  "url": "https://github.com/nickthelegend/rendr-desktop",
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "settle": 2600,
+  "beats": [
+    {
+      "say": "This is Rendr. It records and edits video in one place, and it is driven entirely by an agent over M C P.",
+      "do": [
+        {
+          "wait": 2800
+        }
+      ]
+    },
+    {
+      "say": "This video is the proof. No screen was recorded, no mouse was moved, and no timeline was touched by hand.",
+      "do": [
+        {
+          "move": "article h2, article h1",
+          "travel": 900,
+          "hold": 1800
+        },
+        {
+          "scroll": 380
+        },
+        {
+          "wait": 1200
+        }
+      ]
+    },
+    {
+      "say": "A headless browser drives the page, and the pointer path is authored by the script rather than captured from hardware.",
+      "do": [
+        {
+          "scroll": 620
+        },
+        {
+          "wait": 2200
+        }
+      ]
+    },
+    {
+      "say": "Rendr draws that cursor, and cuts every punch in from the same path, so the zoom always lands on what was clicked.",
+      "do": [
+        {
+          "scroll": 700
+        },
+        {
+          "wait": 2400
+        }
+      ]
+    },
+    {
+      "say": "It has a hundred and one tools for editing, and this whole clip came from one storyboard file.",
+      "do": [
+        {
+          "scroll": 600
+        },
+        {
+          "wait": 2400
+        }
+      ]
+    },
+    {
+      "say": "The voice is Kokoro running locally. No API key, nothing leaves the laptop, and the subtitles are timed from the same words.",
+      "do": [
+        {
+          "wait": 3000
+        }
+      ]
+    }
+  ],
+  "colorScheme": "dark"
+}

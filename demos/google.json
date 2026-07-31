@@ -1,0 +1,46 @@
+{
+  "url": "https://www.google.com",
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "colorScheme": "light",
+  "beats": [
+    {
+      "say": "This entire video was recorded and edited by an agent. Nobody touched a timeline, and nobody touched a mouse.",
+      "do": [{ "wait": 2600 }]
+    },
+    {
+      "say": "It runs in a headless browser, so there is no screen to take over and nothing personal ever ends up in frame.",
+      "do": [
+        { "move": "textarea[name=q], input[name=q]", "travel": 900, "hold": 1500 },
+        { "click": "textarea[name=q], input[name=q]", "after": 700 }
+      ]
+    },
+    {
+      "say": "The pointer you can see is drawn by Rendr from a path the script authored, rather than captured from hardware.",
+      "do": [
+        { "type": "open source screen recorder", "delay": 70 },
+        { "wait": 1600 }
+      ]
+    },
+    {
+      "say": "Because the script knows where it clicked, every punch in lands on the thing that was clicked.",
+      "do": [
+        { "press": "Enter", "settle": 2600 },
+        { "wait": 1200 }
+      ]
+    },
+    {
+      "say": "The zooms, the cursor, the voice and the subtitles are all generated from one storyboard file.",
+      "do": [
+        { "move": "h3", "travel": 900, "hold": 2000 },
+        { "scroll": 420 },
+        { "wait": 1400 }
+      ]
+    },
+    {
+      "say": "This narration is Kokoro, running locally on the machine. No API key, and nothing leaves the laptop.",
+      "do": [{ "wait": 2800 }]
+    }
+  ]
+}

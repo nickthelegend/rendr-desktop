@@ -1302,6 +1302,26 @@ export function useEditorState() {
 		}));
 	}, []);
 
+	/**
+	 * Replaces the project's cursor track.
+	 *
+	 * Telemetry normally arrives from a native capture, which is the only thing
+	 * that sees the OS pointer. A demo driven by a headless browser has no OS
+	 * pointer at all, but it does know exactly where it clicked — so the path
+	 * can be supplied rather than observed, and everything downstream (the drawn
+	 * cursor, suggest_zooms, trim_dead_air) works identically because none of
+	 * them care where the points came from.
+	 */
+	const setCursorTelemetry = useCallback((points: readonly CursorTelemetryPoint[]) => {
+		setState((current) => ({
+			...current,
+			// Sorted on the way in: every reader does a time lookup and a path
+			// that jumps backwards draws the cursor teleporting.
+			cursorTelemetry: [...points].sort((a, b) => a.timeMs - b.timeMs),
+			dirty: true,
+		}));
+	}, []);
+
 	const createTimeline = useCallback(
 		(options: { name?: string; from?: string } = {}) => {
 			const source = options.from
@@ -1903,6 +1923,7 @@ export function useEditorState() {
 		removeLook,
 		renameLook,
 		replaceTimeline,
+		setCursorTelemetry,
 		runNarration,
 		askFor,
 		closePrompt,

@@ -125,6 +125,8 @@ export const DECLARED_TOOLS = [
 	"compare_frames",
 	"replace_media",
 	"export_still_sequence",
+	// Driving a demo without a physical pointer
+	"import_telemetry",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */

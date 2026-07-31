@@ -1,0 +1,48 @@
+{
+  "fps": 30,
+  "totalMs": 60530,
+  "beats": [
+    {
+      "index": 0,
+      "startMs": 4267,
+      "endMs": 14380,
+      "say": "This is Rendr. It records and edits video in one place, and it is driven entirely by an agent over M C P.",
+      "heldForSpeech": 7008
+    },
+    {
+      "index": 1,
+      "startMs": 14380,
+      "endMs": 23128,
+      "say": "This video is the proof. No screen was recorded, no mouse was moved, and no timeline was touched by hand.",
+      "heldForSpeech": 3325
+    },
+    {
+      "index": 2,
+      "startMs": 23128,
+      "endMs": 31962,
+      "say": "A headless browser drives the page, and the pointer path is authored by the script rather than captured from hardware.",
+      "heldForSpeech": 5691
+    },
+    {
+      "index": 3,
+      "startMs": 31962,
+      "endMs": 41628,
+      "say": "Rendr draws that cursor, and cuts every punch in from the same path, so the zoom always lands on what was clicked.",
+      "heldForSpeech": 6158
+    },
+    {
+      "index": 4,
+      "startMs": 41628,
+      "endMs": 49679,
+      "say": "It has a hundred and one tools for editing, and this whole clip came from one storyboard file.",
+      "heldForSpeech": 4708
+    },
+    {
+      "index": 5,
+      "startMs": 49679,
+      "endMs": 59323,
+      "say": "The voice is Kokoro running locally. No API key, nothing leaves the laptop, and the subtitles are timed from the same words.",
+      "heldForSpeech": 6385
+    }
+  ]
+}
