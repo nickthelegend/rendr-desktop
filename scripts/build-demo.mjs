@@ -130,21 +130,6 @@ async function main() {
 		say(`wallet     ${placed.length} inset(s): ${placed.map((p) => `${p.kind}@${p.atSeconds}s`).join(", ")}`);
 	}
 
-	// A persistent context's window is wider than the viewport, so the recorded
-	// frame has dead space baked into it on the right. Measure where the picture
-	// actually ends and crop to it, rather than letting the export carry a grey
-	// band down one side.
-	if (script.wallet) {
-		const edge = await call("inspect_color", { clipId });
-		void edge;
-		await call("crop_clips", { clipIds: [clipId], right: 0.33 });
-		await call("set_clip_properties", {
-			clipIds: [clipId],
-			transform: { centerX: 0.5, centerY: 0.5, width: 1.49, height: 1 },
-		});
-		say("framing    cropped the window padding off the take");
-	}
-
 	const imported = await call("import_telemetry", { points: telemetry });
 	say(`pointer    ${imported.points} samples, ${imported.clicks} clicks`);
 	for (const warning of imported.warnings ?? []) say(`  ! ${warning}`);

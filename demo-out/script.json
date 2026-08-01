@@ -1,56 +1,56 @@
 {
   "fps": 30,
-  "totalMs": 59163,
+  "totalMs": 59759,
   "beats": [
     {
       "index": 0,
-      "startMs": 7716,
-      "endMs": 16635,
+      "startMs": 7954,
+      "endMs": 16836,
       "say": "This is a Sepolia demo app, and the whole clip you are watching was recorded and edited by an agent.",
-      "heldForSpeech": 6863
+      "heldForSpeech": 6859
     },
     {
       "index": 1,
-      "startMs": 16635,
-      "endMs": 29410,
+      "startMs": 16836,
+      "endMs": 29928,
       "say": "Connecting a wallet opens WalletChan, which is a real browser extension running in a real browser.",
       "heldForSpeech": 0
     },
     {
       "index": 2,
-      "startMs": 29410,
-      "endMs": 36656,
+      "startMs": 29928,
+      "endMs": 37187,
       "say": "The account is live. Nothing about this is mocked, and the keys never leave the extension.",
-      "heldForSpeech": 4878
+      "heldForSpeech": 4876
     },
     {
       "index": 3,
-      "startMs": 36656,
-      "endMs": 50299,
+      "startMs": 37187,
+      "endMs": 50896,
       "say": "Now the part that matters. Signing an attestation asks the wallet to approve, exactly as a real transaction would.",
       "heldForSpeech": 0
     },
     {
       "index": 4,
-      "startMs": 50299,
-      "endMs": 57957,
+      "startMs": 50896,
+      "endMs": 58551,
       "say": "The signature comes back into the page, and the whole flow was captured without touching a mouse.",
-      "heldForSpeech": 5034
+      "heldForSpeech": 5045
     }
   ],
   "marks": [
     {
       "kind": "connect",
-      "atMs": 23164
+      "atMs": 23663
     },
     {
       "kind": "sign",
-      "atMs": 43642
+      "atMs": 44224
     }
   ],
   "wallet": true,
   "videoStartMs": {
-    "demo": 101,
-    "wallet": 5617
+    "demo": 105,
+    "wallet": 5821
   }
 }

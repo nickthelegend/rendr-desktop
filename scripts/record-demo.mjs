@@ -400,6 +400,13 @@ async function main() {
 			args: [
 				`--disable-extensions-except=${wallet.extension}`,
 				`--load-extension=${wallet.extension}`,
+				// The window has to be bigger than the viewport, or Chrome shrinks
+				// the page to fit and the recording ends up with dead space down
+				// one side. Cropping that away afterwards is not a fix: the drawn
+				// cursor comes from telemetry in the original frame's coordinates,
+				// so moving the picture and not the overlay puts the pointer
+				// beside the button it clicked instead of on it.
+				`--window-size=${size.width + 160},${size.height + 220}`,
 			],
 		});
 		const worker =
@@ -449,6 +456,12 @@ async function main() {
 
 	if (board.url) {
 		await page.goto(board.url, { waitUntil: "domcontentloaded" });
+		const real = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+		if (real[0] !== size.width || real[1] !== size.height) {
+			console.warn(
+				`  ! page is ${real[0]}x${real[1]} but the video is ${size.width}x${size.height} — the recording will have dead space, and the drawn cursor will not line up`,
+			);
+		}
 		await page.waitForTimeout(board.settle ?? 1800);
 	}
 
