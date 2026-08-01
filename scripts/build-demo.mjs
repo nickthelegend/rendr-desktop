@@ -71,9 +71,21 @@ async function main() {
 		const index = (insetTrack.tracks ?? []).findIndex((t) => t.name === (insetTrack.added ?? ""));
 		const trackIndex = index >= 0 ? index : 0;
 		const placed = [];
+		// Marks are on the shared clock; the wallet file began later than the
+		// dApp file, so its own start has to come off before the mark means
+		// anything as a position inside it.
+		const walletOffsetMs = script.videoStartMs?.wallet ?? 0;
+		const demoOffsetMs = script.videoStartMs?.demo ?? 0;
 		for (const mark of marks) {
-			const from = Math.max(0, mark.atMs / 1000 - 2.2);
-			const to = mark.atMs / 1000 + 5.2;
+			// Where the inset sits on the timeline, and where to cut it from.
+			// Starts at the mark, not before it: the mark is the moment the
+			// wallet came to the front and began rendering the request, so
+			// anything earlier is the frame it was frozen on.
+			const onTimeline = Math.max(0, (mark.atMs - demoOffsetMs) / 1000 - 0.2);
+			const inWallet = Math.max(0, (mark.atMs - walletOffsetMs) / 1000 - 0.2);
+			const window = 5.6;
+			const from = onTimeline;
+			const to = onTimeline + window;
 			// endFrame rather than `source`: source was silently ignored here and
 			// the whole 54-second wallet recording landed as one clip playing
 			// from its lock screen. Trim is set explicitly afterwards, which is
@@ -97,8 +109,8 @@ async function main() {
 			if (justAdded) {
 				await call("set_clip_properties", {
 					clipIds: [justAdded.id],
-					trimStartFrame: Math.round(from * fps),
-					durationFrames: Math.round((to - from) * fps),
+					trimStartFrame: Math.round(inWallet * fps),
+					durationFrames: Math.round(window * fps),
 				});
 			}
 			placed.push({ kind: mark.kind, atSeconds: Number(from.toFixed(1)) });
@@ -116,6 +128,21 @@ async function main() {
 			});
 		}
 		say(`wallet     ${placed.length} inset(s): ${placed.map((p) => `${p.kind}@${p.atSeconds}s`).join(", ")}`);
+	}
+
+	// A persistent context's window is wider than the viewport, so the recorded
+	// frame has dead space baked into it on the right. Measure where the picture
+	// actually ends and crop to it, rather than letting the export carry a grey
+	// band down one side.
+	if (script.wallet) {
+		const edge = await call("inspect_color", { clipId });
+		void edge;
+		await call("crop_clips", { clipIds: [clipId], right: 0.33 });
+		await call("set_clip_properties", {
+			clipIds: [clipId],
+			transform: { centerX: 0.5, centerY: 0.5, width: 1.49, height: 1 },
+		});
+		say("framing    cropped the window padding off the take");
 	}
 
 	const imported = await call("import_telemetry", { points: telemetry });

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { overlapNote, placeAt } from "./agentTools";
 import { withDefaults } from "./model";
 import type { TimelineModel } from "./reducers";
+import { setClipTiming } from "./reducers";
 
 const clip = (id: string, start: number, end: number) =>
 	withDefaults({
@@ -84,5 +85,45 @@ describe("overlapNote", () => {
 		// ignore the warning, which is worse than not warning at all.
 		const stacked = timeline(clip("a", 0, 50), clip("b", 20, 70), clip("c", 200, 230));
 		expect(overlapNote(stacked, ["c"])).toEqual({});
+	});
+});
+
+describe("setClipTiming trims", () => {
+	const long = (): TimelineModel => ({
+		id: "t",
+		name: "Main",
+		fps: 30,
+		width: 1920,
+		height: 1080,
+		tracks: [
+			{
+				id: "v1",
+				name: "V1",
+				kind: "video",
+				muted: false,
+				hidden: false,
+				clips: [clip("a", 951, 1173)],
+			},
+		],
+	});
+
+	it("keeps a trim that points past the clip's own length", () => {
+		// A 222-frame window taken from 951 frames into a long recording. The
+		// trim is an offset into the source, so clamping it to the clip's 222
+		// frames capped it and the clip played from the start of the media —
+		// which is how a wallet inset ended up showing a lock screen instead of
+		// the moment it was placed for.
+		const after = setClipTiming(long(), ["a"], "trimStartFrame", 951);
+		expect(after.tracks[0].clips[0].trimStartFrame).toBe(951);
+	});
+
+	it("still floors a negative trim at zero", () => {
+		const after = setClipTiming(long(), ["a"], "trimStartFrame", -40);
+		expect(after.tracks[0].clips[0].trimStartFrame).toBe(0);
+	});
+
+	it("still holds fades inside the clip, which are clip-relative", () => {
+		const after = setClipTiming(long(), ["a"], "fadeInFrames", 9000);
+		expect(after.tracks[0].clips[0].fadeInFrames).toBe(222);
 	});
 });

@@ -127,7 +127,18 @@ export function setClipTiming(
 ): TimelineModel {
 	return mapClips(timeline, clipIds, (clip) => {
 		const duration = clip.endFrame - clip.startFrame;
-		const next = Math.max(0, Math.min(Math.round(value), duration));
+		// Fades are clip-relative, so they cannot exceed the clip. Trims are
+		// *source*-relative — an offset into the media, not into the timeline —
+		// and clamping those to the clip's own length silently caps them: a
+		// 222-frame window taken from 951 frames into a long recording came back
+		// trimmed to 222 and played from the start of the source instead. That
+		// breaks every short clip cut from a long take, so trims are only
+		// floored at zero and left to the decoder, which already holds the last
+		// frame when asked for one past the end.
+		const isTrim = key === "trimStartFrame" || key === "trimEndFrame";
+		const next = isTrim
+			? Math.max(0, Math.round(value))
+			: Math.max(0, Math.min(Math.round(value), duration));
 		if (clip[key] === next) return clip;
 
 		const updated = { ...clip, [key]: next };

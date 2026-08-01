@@ -67,7 +67,7 @@ function speechMs(text) {
 const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 
 class Recorder {
-	constructor(page, size) {
+	constructor(page, size, t0) {
 		this.page = page;
 		this.size = size;
 		this.points = [];
@@ -79,7 +79,7 @@ class Recorder {
 		// which put every telemetry sample at cy ~0.95 — so every zoom focused
 		// on the bottom of the frame and read as "it only zooms to the centre".
 		this.at = { x: size.width * 0.5, y: size.height * 0.42 };
-		this.t0 = Date.now();
+		this.t0 = t0 ?? Date.now();
 	}
 
 	get now() {
@@ -252,7 +252,15 @@ async function runStep(rec, step) {
 		// rather than a cut to a panel that appeared from nowhere.
 		await rec.glideTo(rec.size.width * 0.78, rec.size.height * 0.46, 700);
 		await rec.dwell(900);
+		// The mark is taken once the wallet is actually in front and rendering.
+		// A backgrounded tab is throttled, so its video holds the last frame it
+		// drew — front it first, or the inset is cut from a window in which the
+		// wallet was still showing whatever it showed before the request.
+		await rec.wallet.bringToFront();
+		await rec.page.waitForTimeout(1200);
 		rec.marks.push({ kind: step.approve, atMs: rec.now });
+		// Let the dialog sit on screen long enough to be worth cutting to.
+		await rec.page.waitForTimeout(step.read ?? 2000);
 		const clicked = await approve(
 			rec.wallet,
 			step.pattern ? new RegExp(step.pattern, "i") : undefined,
@@ -317,7 +325,7 @@ async function openWallet(ctx, id, password) {
  */
 async function approve(wallet, pattern) {
 	await wallet.bringToFront();
-	await wallet.waitForTimeout(900);
+	await wallet.waitForTimeout(500);
 	const want = pattern ?? /^(connect|approve|confirm|sign)$/i;
 	const deadline = Date.now() + 15000;
 	while (Date.now() < deadline) {
@@ -419,15 +427,24 @@ async function main() {
 		});
 	}
 
+	// The clock starts before either page, so both videos can be placed on it.
+	// Each page's recording begins when that page is created, and the wallet is
+	// created several seconds after the dApp — so a mark taken on the shared
+	// clock points at a different moment in each file. Without the offset the
+	// wallet inset lands seconds early and shows whatever the wallet happened
+	// to be doing then, which is how it kept showing its home screen.
+	const clockStart = Date.now();
 	const page = await context.newPage();
+	const pageStartedMs = Date.now() - clockStart;
 	const walletPage = wallet
 		? await openWallet(context, extensionId, process.env[wallet.passwordEnv ?? "WALLETCHAN_PASSWORD"])
 		: null;
+	const walletStartedMs = walletPage ? Date.now() - clockStart : 0;
 	if (walletPage) await page.bringToFront();
 
 	// Video encoding begins with the context, so the clock starts here and the
 	// first beat is deliberately given a moment to settle.
-	const rec = new Recorder(page, size);
+	const rec = new Recorder(page, size, clockStart);
 	rec.wallet = walletPage;
 
 	if (board.url) {
@@ -506,7 +523,16 @@ async function main() {
 	await writeFile(
 		join(outDir, "script.json"),
 		JSON.stringify(
-			{ fps: board.fps ?? 30, totalMs, beats: rec.beats, marks: rec.marks, wallet: Boolean(wallet) },
+			{
+				fps: board.fps ?? 30,
+				totalMs,
+				beats: rec.beats,
+				marks: rec.marks,
+				wallet: Boolean(wallet),
+				// Where each recording begins on the shared clock. The builder
+				// subtracts these to turn a mark into a position in that file.
+				videoStartMs: { demo: pageStartedMs, wallet: walletStartedMs },
+			},
 			null,
 			2,
 		),
