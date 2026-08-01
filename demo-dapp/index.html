@@ -62,6 +62,30 @@
     out.innerHTML = line("Status", "waiting for approval in the wallet…");
     const [a] = await window.ethereum.request({ method: "eth_requestAccounts" });
     account = a;
+    // Ask for Sepolia rather than reporting whatever the wallet happened to be
+    // on. A page that says "Sepolia testnet" while the wallet signs on another
+    // chain is worse than saying nothing.
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0xaa36a7" }],
+      });
+    } catch (error) {
+      if (error?.code === 4902) {
+        await window.ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [
+            {
+              chainId: "0xaa36a7",
+              chainName: "Sepolia",
+              nativeCurrency: { name: "Sepolia Ether", symbol: "ETH", decimals: 18 },
+              rpcUrls: ["https://ethereum-sepolia-rpc.publicnode.com"],
+              blockExplorerUrls: ["https://sepolia.etherscan.io"],
+            },
+          ],
+        });
+      }
+    }
     const chainId = await window.ethereum.request({ method: "eth_chainId" });
     out.innerHTML =
       line("Account", a) +

@@ -374,6 +374,7 @@ async function main() {
 	await mkdir(outDir, { recursive: true });
 
 	const wallet = board.wallet ?? null;
+	let contentScale = { x: 1, y: 1 };
 	let runProfile = null;
 	let browser = null;
 	let context;
@@ -404,12 +405,14 @@ async function main() {
 			args: [
 				`--disable-extensions-except=${wallet.extension}`,
 				`--load-extension=${wallet.extension}`,
-				// The window has to be bigger than the viewport, or Chrome shrinks
-				// the page to fit and the recording ends up with dead space down
-				// one side. Cropping that away afterwards is not a fix: the drawn
-				// cursor comes from telemetry in the original frame's coordinates,
-				// so moving the picture and not the overlay puts the pointer
-				// beside the button it clicked instead of on it.
+				// Room for the viewport *and* the extension's side panel. The panel
+				// takes roughly 420px out of the window the moment it opens, so a
+				// window sized only for the viewport leaves the page rendering at
+				// ~860px inside a 1280px video — a third of the frame is then dead
+				// grey. Cropping that away afterwards is not a fix either: the
+				// drawn cursor comes from telemetry in the original frame's
+				// coordinates, so moving the picture and not the overlay puts the
+				// pointer beside the button it clicked instead of on it.
 				`--window-size=${size.width + 160},${size.height + 220}`,
 			],
 		});
@@ -455,17 +458,28 @@ async function main() {
 
 	// Video encoding begins with the context, so the clock starts here and the
 	// first beat is deliberately given a moment to settle.
+	// Checked after the wallet exists, because the side panel is what shrinks
+	// the page — measuring before it opens always reports the size we asked for.
+	// The extension's side panel takes part of the window, so the page renders
+	// narrower than the video and the rest of the frame is dead grey. Widening
+	// the window past the display makes Chrome unreachable, so the size is
+	// measured and handed to the builder instead, which crops to it and rescales
+	// the pointer path by the same factor — crop the picture without moving the
+	// overlay and the cursor lands beside every button it presses.
+	const real = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+	contentScale = { x: real[0] / size.width, y: real[1] / size.height };
+	if (contentScale.x < 0.995 || contentScale.y < 0.995) {
+		console.log(
+			`  page renders ${real[0]}x${real[1]} of a ${size.width}x${size.height} frame — the builder will crop to it`,
+		);
+	}
+
 	const rec = new Recorder(page, size, clockStart);
 	rec.wallet = walletPage;
 
 	if (board.url) {
 		await page.goto(board.url, { waitUntil: "domcontentloaded" });
-		const real = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
-		if (real[0] !== size.width || real[1] !== size.height) {
-			console.warn(
-				`  ! page is ${real[0]}x${real[1]} but the video is ${size.width}x${size.height} — the recording will have dead space, and the drawn cursor will not line up`,
-			);
-		}
+
 		await page.waitForTimeout(board.settle ?? 1800);
 	}
 
@@ -549,6 +563,7 @@ async function main() {
 				// Where each recording begins on the shared clock. The builder
 				// subtracts these to turn a mark into a position in that file.
 				videoStartMs: { demo: pageStartedMs, wallet: walletStartedMs },
+				contentScale,
 			},
 			null,
 			2,

@@ -142,7 +142,31 @@ async function main() {
 		say(`wallet     ${placed.length} inset(s): ${placed.map((p) => `${p.kind}@${p.atSeconds}s`).join(", ")}`);
 	}
 
-	const imported = await call("import_telemetry", { points: telemetry });
+	// Crop the dead space the side panel left in the frame, and rescale the
+	// pointer path by the same factor so it still points at what it clicked.
+	const scale = script.contentScale ?? { x: 1, y: 1 };
+	const cropped = scale.x < 0.995 || scale.y < 0.995;
+	if (cropped) {
+		await call("crop_clips", {
+			clipIds: [clipId],
+			right: Number((1 - scale.x).toFixed(4)),
+			bottom: Number((1 - scale.y).toFixed(4)),
+		});
+		await call("set_clip_properties", {
+			clipIds: [clipId],
+			transform: { centerX: 0.5, centerY: 0.5, width: 1 / scale.x, height: 1 / scale.y },
+		});
+		say(`framing    cropped to the ${Math.round(scale.x * 100)}% of frame the page actually used`);
+	}
+
+	const points = cropped
+		? telemetry.map((point) => ({
+				...point,
+				cx: Math.min(1, point.cx / scale.x),
+				cy: Math.min(1, point.cy / scale.y),
+			}))
+		: telemetry;
+	const imported = await call("import_telemetry", { points });
 	say(`pointer    ${imported.points} samples, ${imported.clicks} clicks`);
 	for (const warning of imported.warnings ?? []) say(`  ! ${warning}`);
 
