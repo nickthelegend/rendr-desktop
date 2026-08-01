@@ -250,8 +250,12 @@ async function runStep(rec, step) {
 		// Walk the pointer toward where the inset will sit before approving, so
 		// the finished cut reads as one continuous movement into the wallet
 		// rather than a cut to a panel that appeared from nowhere.
-		await rec.glideTo(rec.size.width * 0.78, rec.size.height * 0.46, 700);
-		await rec.dwell(900);
+		// Aim at where the wallet's own approve button will sit once the inset is
+		// composited: the inset is centred at 0.78 and its button sits near the
+		// bottom of the panel. Landing the drawn cursor on the button it is
+		// about to press is the difference between a demo and a slideshow.
+		await rec.glideTo(rec.size.width * 0.82, rec.size.height * 0.80, 750);
+		await rec.dwell(800);
 		// The mark is taken once the wallet is actually in front and rendering.
 		// A backgrounded tab is throttled, so its video holds the last frame it
 		// drew — front it first, or the inset is cut from a window in which the

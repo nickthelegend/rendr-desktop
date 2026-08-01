@@ -118,11 +118,23 @@ async function main() {
 		// Inset on the right, where the pointer was steered before approving.
 		const after = await call("get_timeline", {});
 		const insetIds = (after.tracks[trackIndex]?.clips ?? []).map((c) => c.id);
+
+		// The wallet's own recording is mostly empty: its UI is a narrow centred
+		// column in a 1280-wide frame, with the page behind it either side and a
+		// grey strip at the far right. Dropped in whole, the inset is mostly
+		// dead space with a small wallet in it. Cropped to the column, the inset
+		// is the wallet.
 		if (insetIds.length) {
+			await call("crop_clips", { clipIds: insetIds, left: 0.29, right: 0.33 });
+		}
+		if (insetIds.length) {
+			// Cropped to 0.38 of a 16:9 frame, the column is taller than it is
+			// wide, so the inset is sized to that rather than to the clip's
+			// original aspect — otherwise it stretches.
 			await call("set_clip_properties", {
 				clipIds: insetIds,
-				transform: { centerX: 0.775, centerY: 0.5, width: 0.4, height: 0.86 },
-				edgeRounding: 0.06,
+				transform: { centerX: 0.78, centerY: 0.5, width: 0.30, height: 0.88 },
+				edgeRounding: 0.05,
 				fadeInFrames: 6,
 				fadeOutFrames: 6,
 			});
