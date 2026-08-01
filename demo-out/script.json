@@ -1,48 +1,52 @@
 {
   "fps": 30,
-  "totalMs": 62223,
+  "totalMs": 47863,
   "beats": [
     {
       "index": 0,
-      "startMs": 4020,
-      "endMs": 13965,
-      "say": "This is Rendr. It records and edits video in one place, and it is driven entirely by an agent over M C P.",
-      "heldForSpeech": 0
+      "startMs": 2090,
+      "endMs": 10994,
+      "say": "This is a Sepolia demo app, and the whole clip you are watching was recorded and edited by an agent.",
+      "heldForSpeech": 6878
     },
     {
       "index": 1,
-      "startMs": 13965,
-      "endMs": 23543,
-      "say": "This video is the proof. No screen was recorded, no mouse was moved, and no timeline was touched by hand.",
+      "startMs": 10994,
+      "endMs": 21089,
+      "say": "Connecting a wallet opens WalletChan, which is a real browser extension running in a real browser.",
       "heldForSpeech": 0
     },
     {
       "index": 2,
-      "startMs": 23543,
-      "endMs": 33388,
-      "say": "A headless browser drives the page, and the pointer path is authored by the script rather than captured from hardware.",
-      "heldForSpeech": 0
+      "startMs": 21089,
+      "endMs": 28297,
+      "say": "The account is live. Nothing about this is mocked, and the keys never leave the extension.",
+      "heldForSpeech": 4859
     },
     {
       "index": 3,
-      "startMs": 33388,
-      "endMs": 43555,
-      "say": "Rendr draws that cursor, and cuts every punch in from the same path, so the zoom always lands on what was clicked.",
+      "startMs": 28297,
+      "endMs": 39029,
+      "say": "Now the part that matters. Signing an attestation asks the wallet to approve, exactly as a real transaction would.",
       "heldForSpeech": 0
     },
     {
       "index": 4,
-      "startMs": 43555,
-      "endMs": 51500,
-      "say": "It has a hundred and one tools for editing, and this whole clip came from one storyboard file.",
-      "heldForSpeech": 0
+      "startMs": 39029,
+      "endMs": 46656,
+      "say": "The signature comes back into the page, and the whole flow was captured without touching a mouse.",
+      "heldForSpeech": 5038
+    }
+  ],
+  "marks": [
+    {
+      "kind": "connect",
+      "atMs": 16357
     },
     {
-      "index": 5,
-      "startMs": 51500,
-      "endMs": 61008,
-      "say": "The voice is Kokoro running locally. No API key, nothing leaves the laptop, and the subtitles are timed from the same words.",
-      "heldForSpeech": 0
+      "kind": "sign",
+      "atMs": 33912
     }
-  ]
+  ],
+  "wallet": true
 }

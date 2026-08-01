@@ -17,7 +17,7 @@
 //
 // Writes outdir/demo.webm, outdir/telemetry.json and outdir/script.json.
 
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { chromium } from "playwright";
@@ -72,6 +72,9 @@ class Recorder {
 		this.size = size;
 		this.points = [];
 		this.beats = [];
+		/** When each wallet approval happened, for timing the inset. */
+		this.marks = [];
+		this.wallet = null;
 		// Upper-middle of the content. The old default was the bottom edge,
 		// which put every telemetry sample at cy ~0.95 — so every zoom focused
 		// on the bottom of the frame and read as "it only zooms to the centre".
@@ -239,6 +242,27 @@ async function runStep(rec, step) {
 		return;
 	}
 
+	if (step.approve) {
+		if (!rec.wallet) {
+			console.warn("  ! approve step but no wallet configured, skipped");
+			return;
+		}
+		// Walk the pointer toward where the inset will sit before approving, so
+		// the finished cut reads as one continuous movement into the wallet
+		// rather than a cut to a panel that appeared from nowhere.
+		await rec.glideTo(rec.size.width * 0.78, rec.size.height * 0.46, 700);
+		await rec.dwell(900);
+		rec.marks.push({ kind: step.approve, atMs: rec.now });
+		const clicked = await approve(
+			rec.wallet,
+			step.pattern ? new RegExp(step.pattern, "i") : undefined,
+		);
+		if (clicked) console.log(`  approved ${step.approve} — clicked "${clicked}"`);
+		await rec.page.bringToFront();
+		await rec.dwell(step.after ?? 1500);
+		return;
+	}
+
 	const selector = step.move ?? step.click;
 	if (!selector) return;
 	const target = await rec.centreOf(selector);
@@ -259,6 +283,74 @@ async function runStep(rec, step) {
 	}
 }
 
+/**
+ * The wallet's own UI, opened as an ordinary page.
+ *
+ * WalletChan declares side_panel.default_path as index.html, so the panel is a
+ * normal extension page rather than browser chrome — which means Playwright can
+ * drive it, and, because recordVideo writes one file per page, it records to
+ * its own track. That track becomes a picture-in-picture inset at build time,
+ * which is a better shot than a screen capture of a real side panel could be.
+ */
+async function openWallet(ctx, id, password) {
+	const page = await ctx.newPage();
+	await page.goto(`chrome-extension://${id}/index.html`, { waitUntil: "domcontentloaded" });
+	await page.waitForTimeout(2500);
+	const field = page.locator("input[type=password]").first();
+	if (password && (await field.count())) {
+		await field.fill(password);
+		const go = page.locator("button").filter({ hasText: /unlock|continue|open/i }).first();
+		if (await go.count()) await go.click();
+		await page.waitForTimeout(2500);
+	}
+	return page;
+}
+
+/**
+ * Approves whatever the wallet is currently asking about.
+ *
+ * Matched against the button's whole text and anchored, so "Sign" is found and
+ * "Signing with" is not — an unanchored substring match picks up labels around
+ * the control and clicks the wrong thing. Reject is excluded explicitly rather
+ * than relying on the pattern to miss it, because clicking it is the one
+ * outcome that silently ruins a take.
+ */
+async function approve(wallet, pattern) {
+	await wallet.bringToFront();
+	await wallet.waitForTimeout(900);
+	const want = pattern ?? /^(connect|approve|confirm|sign)$/i;
+	const deadline = Date.now() + 15000;
+	while (Date.now() < deadline) {
+		const buttons = wallet.locator("button");
+		const count = await buttons.count();
+		for (let i = 0; i < count; i++) {
+			const button = buttons.nth(i);
+			const label = ((await button.innerText().catch(() => "")) || "").trim();
+			if (!label || /reject|cancel|deny|close/i.test(label)) continue;
+			if (!want.test(label)) continue;
+			if (!(await button.isVisible().catch(() => false))) continue;
+			if (!(await button.isEnabled().catch(() => false))) continue;
+			await button.scrollIntoViewIfNeeded().catch(() => {});
+			await button.click();
+			await wallet.waitForTimeout(1600);
+			return label;
+		}
+		await wallet.waitForTimeout(500);
+	}
+	// Say what was actually on screen; a silent miss here is the difference
+	// between a demo that signs and one that just sits there.
+	const seen = await wallet
+		.evaluate(() =>
+			[...document.querySelectorAll("button")]
+				.map((n) => n.innerText.trim().replace(/\s+/g, " "))
+				.filter(Boolean)
+				.slice(0, 10),
+		)
+		.catch(() => []);
+	console.warn(`  ! no approve button matched ${want}. On screen: ${seen.join(" / ") || "nothing"}`);
+	return null;
+}
+
 async function main() {
 	const [storyboardPath, outDir = "demo-out"] = process.argv.slice(2);
 	if (!storyboardPath) {
@@ -269,8 +361,49 @@ async function main() {
 	const size = { width: board.width ?? 1280, height: board.height ?? 720 };
 	await mkdir(outDir, { recursive: true });
 
-	const browser = await chromium.launch({ headless: board.headless !== false });
-	const context = await browser.newContext({
+	const wallet = board.wallet ?? null;
+	let runProfile = null;
+	let browser = null;
+	let context;
+	let extensionId = null;
+
+	if (wallet) {
+		// Each run starts from a pristine copy of the onboarded profile. Reusing
+		// the profile in place means the dApp is already an approved site by the
+		// second run, so the connect prompt never appears and the demo silently
+		// loses the step it exists to show — and any request left pending from a
+		// previous take is still sitting there waiting to be mis-clicked.
+		const template = wallet.profile ?? "./.wallet-profile";
+		runProfile = join(outDir, "profile");
+		await rm(runProfile, { recursive: true, force: true });
+		await cp(template, runProfile, { recursive: true });
+	}
+
+	if (wallet) {
+		// Extensions need a persistent context and a real browser window; the
+		// window is Playwright's own, not the user's screen, so this still does
+		// not take over the machine.
+		context = await chromium.launchPersistentContext(runProfile, {
+			headless: false,
+			viewport: size,
+			deviceScaleFactor: board.deviceScaleFactor ?? 2,
+			recordVideo: { dir: outDir, size },
+			colorScheme: board.colorScheme ?? "dark",
+			args: [
+				`--disable-extensions-except=${wallet.extension}`,
+				`--load-extension=${wallet.extension}`,
+			],
+		});
+		const worker =
+			context.serviceWorkers()[0] ??
+			(await context.waitForEvent("serviceworker", { timeout: 20000 }));
+		// No manifest key, so the unpacked id is derived from the path and has
+		// to be read at runtime rather than written down.
+		extensionId = new URL(worker.url()).host;
+		console.log(`wallet extension ${extensionId}`);
+	} else {
+		browser = await chromium.launch({ headless: board.headless !== false });
+		context = await browser.newContext({
 		viewport: size,
 		deviceScaleFactor: board.deviceScaleFactor ?? 2,
 		recordVideo: { dir: outDir, size },
@@ -283,12 +416,19 @@ async function main() {
 		// A fresh context every run: no profile, no history, no autocomplete —
 		// so nothing personal can end up in frame.
 		storageState: undefined,
-	});
+		});
+	}
+
 	const page = await context.newPage();
+	const walletPage = wallet
+		? await openWallet(context, extensionId, process.env[wallet.passwordEnv ?? "WALLETCHAN_PASSWORD"])
+		: null;
+	if (walletPage) await page.bringToFront();
 
 	// Video encoding begins with the context, so the clock starts here and the
 	// first beat is deliberately given a moment to settle.
 	const rec = new Recorder(page, size);
+	rec.wallet = walletPage;
 
 	if (board.url) {
 		await page.goto(board.url, { waitUntil: "domcontentloaded" });
@@ -337,21 +477,42 @@ async function main() {
 	await rec.dwell(board.tail ?? 1200);
 	const totalMs = rec.now;
 
+	// Grab the handles before closing: the files are only finalised on close,
+	// but the handle has to be taken while the page still exists.
+	const pageVideo = page.video();
+	const walletVideo = walletPage?.video() ?? null;
 	await context.close();
-	await browser.close();
+	if (browser) await browser.close();
 
 	// Playwright names the video after the page's guid, so find and rename it.
-	const files = await readdir(outDir);
-	const video = files.find((name) => name.endsWith(".webm") && name !== "demo.webm");
-	if (video) await rename(join(outDir, video), join(outDir, "demo.webm"));
+	// Ask each Page for its own video rather than guessing from the directory:
+	// a persistent context has other pages in it (about:blank, the profile's
+	// initial tab) and every one of them writes a .webm.
+	const take = async (video, to) => {
+		if (!video) return false;
+		try {
+			const from = await video.path();
+			await rename(from, join(outDir, to));
+			return true;
+		} catch (error) {
+			console.warn(`  ! could not save ${to}: ${error.message}`);
+			return false;
+		}
+	};
+	await take(pageVideo, "demo.webm");
+	const hasWallet = await take(walletVideo, "wallet.webm");
 
 	await writeFile(join(outDir, "telemetry.json"), JSON.stringify(rec.points));
 	await writeFile(
 		join(outDir, "script.json"),
-		JSON.stringify({ fps: board.fps ?? 30, totalMs, beats: rec.beats }, null, 2),
+		JSON.stringify(
+			{ fps: board.fps ?? 30, totalMs, beats: rec.beats, marks: rec.marks, wallet: Boolean(wallet) },
+			null,
+			2,
+		),
 	);
 
-	console.log(`\nvideo      ${join(outDir, "demo.webm")}`);
+	console.log(`\nvideo      ${join(outDir, "demo.webm")}${hasWallet ? " + wallet.webm" : ""}`);
 	console.log(`telemetry  ${rec.points.length} points over ${(totalMs / 1000).toFixed(1)}s`);
 	console.log(`clicks     ${rec.points.filter((p) => p.interactionType === "click").length}`);
 }

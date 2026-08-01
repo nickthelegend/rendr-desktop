@@ -61,6 +61,63 @@ async function main() {
 	const clipId = placed.tracks.flatMap((track) => track.clips ?? []).find(Boolean)?.id;
 	if (!clipId) throw new Error("The take did not land on the timeline.");
 
+	// The wallet is its own recording, so it goes on as an inset over the take
+	// rather than being cut to. Placed only around the approvals: an inset that
+	// is on screen the whole time stops reading as "the wallet just opened".
+	const marks = script.marks ?? [];
+	if (script.wallet && marks.length) {
+		const wallet = await call("import_media", { source: { path: join(dir, "wallet.webm") } });
+		const insetTrack = await call("manage_tracks", { add: "video" });
+		const index = (insetTrack.tracks ?? []).findIndex((t) => t.name === (insetTrack.added ?? ""));
+		const trackIndex = index >= 0 ? index : 0;
+		const placed = [];
+		for (const mark of marks) {
+			const from = Math.max(0, mark.atMs / 1000 - 2.2);
+			const to = mark.atMs / 1000 + 5.2;
+			// endFrame rather than `source`: source was silently ignored here and
+			// the whole 54-second wallet recording landed as one clip playing
+			// from its lock screen. Trim is set explicitly afterwards, which is
+			// what actually moves the in-point.
+			const startFrame = Math.round(from * fps);
+			const entry = await call("add_clips", {
+				entries: [
+					{
+						mediaRef: wallet.mediaRef,
+						trackIndex,
+						startFrame,
+						endFrame: Math.round(to * fps),
+					},
+				],
+			});
+			if (entry.error) continue;
+			const now = await call("get_timeline", {});
+			const justAdded = (now.tracks[trackIndex]?.clips ?? []).find(
+				(c) => c.frames?.[0] === startFrame,
+			);
+			if (justAdded) {
+				await call("set_clip_properties", {
+					clipIds: [justAdded.id],
+					trimStartFrame: Math.round(from * fps),
+					durationFrames: Math.round((to - from) * fps),
+				});
+			}
+			placed.push({ kind: mark.kind, atSeconds: Number(from.toFixed(1)) });
+		}
+		// Inset on the right, where the pointer was steered before approving.
+		const after = await call("get_timeline", {});
+		const insetIds = (after.tracks[trackIndex]?.clips ?? []).map((c) => c.id);
+		if (insetIds.length) {
+			await call("set_clip_properties", {
+				clipIds: insetIds,
+				transform: { centerX: 0.775, centerY: 0.5, width: 0.4, height: 0.86 },
+				edgeRounding: 0.06,
+				fadeInFrames: 6,
+				fadeOutFrames: 6,
+			});
+		}
+		say(`wallet     ${placed.length} inset(s): ${placed.map((p) => `${p.kind}@${p.atSeconds}s`).join(", ")}`);
+	}
+
 	const imported = await call("import_telemetry", { points: telemetry });
 	say(`pointer    ${imported.points} samples, ${imported.clicks} clicks`);
 	for (const warning of imported.warnings ?? []) say(`  ! ${warning}`);

@@ -1,0 +1,70 @@
+{
+  "url": "http://127.0.0.1:8899/",
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "colorScheme": "dark",
+  "settle": 2000,
+  "wallet": {
+    "extension": "/private/tmp/claude-501/-Volumes-Extreme-SSD-Projects-rendr-claude/7f4e24d8-5734-4fec-bad4-fdc3ddc85911/scratchpad/walletchan",
+    "profile": "./.wallet-profile",
+    "passwordEnv": "WALLETCHAN_PASSWORD"
+  },
+  "beats": [
+    {
+      "say": "This is a Sepolia demo app, and the whole clip you are watching was recorded and edited by an agent.",
+      "do": [
+        {
+          "wait": 1800
+        }
+      ],
+      "stay": true
+    },
+    {
+      "say": "Connecting a wallet opens WalletChan, which is a real browser extension running in a real browser.",
+      "do": [
+        {
+          "click": "[data-testid=connect]",
+          "after": 2200
+        },
+        {
+          "approve": "connect",
+          "pattern": "^connect$",
+          "after": 2000
+        }
+      ]
+    },
+    {
+      "say": "The account is live. Nothing about this is mocked, and the keys never leave the extension.",
+      "do": [
+        {
+          "wait": 2200
+        }
+      ],
+      "stay": true
+    },
+    {
+      "say": "Now the part that matters. Signing an attestation asks the wallet to approve, exactly as a real transaction would.",
+      "do": [
+        {
+          "click": "[data-testid=sign]",
+          "after": 2400
+        },
+        {
+          "approve": "sign",
+          "pattern": "^sign$",
+          "after": 2400
+        }
+      ]
+    },
+    {
+      "say": "The signature comes back into the page, and the whole flow was captured without touching a mouse.",
+      "do": [
+        {
+          "wait": 2400
+        }
+      ],
+      "stay": true
+    }
+  ]
+}
