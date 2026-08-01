@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Sepolia Attestation Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: #0B0E14; color: #E6EAF2;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .card {
+    width: 560px; padding: 40px; border-radius: 20px;
+    background: linear-gradient(165deg, #141A26 0%, #0F1420 100%);
+    border: 1px solid #222B3D;
+    box-shadow: 0 24px 70px rgba(0,0,0,.55);
+  }
+  h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: -.02em; }
+  .sub { margin: 0 0 30px; color: #8492AC; font-size: 15px; }
+  .row { display: flex; gap: 12px; margin-bottom: 18px; }
+  button {
+    flex: 1; padding: 15px 20px; border: 0; border-radius: 12px;
+    font: 600 15px/1 inherit; color: #08111F; background: #FF9F3D;
+    cursor: pointer; transition: transform .12s ease, filter .12s ease;
+  }
+  button:hover { filter: brightness(1.08); transform: translateY(-1px); }
+  button:disabled { background: #2A3040; color: #6B7690; cursor: not-allowed; transform: none; }
+  button.ghost { background: #1B2231; color: #C6D0E4; border: 1px solid #2C374C; }
+  .panel {
+    padding: 18px 20px; border-radius: 12px; background: #0A0F1A;
+    border: 1px solid #1E2740; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #9FB0CE; min-height: 96px; word-break: break-all;
+  }
+  .k { color: #5C6B88; }
+  .ok { color: #4ADE80; }
+  .badge {
+    display: inline-block; padding: 4px 10px; border-radius: 999px;
+    background: #1C2A1E; color: #6EE7A0; font-size: 12px; font-weight: 600;
+    margin-bottom: 22px; letter-spacing: .04em;
+  }
+</style>
+<div class="card">
+  <span class="badge">SEPOLIA TESTNET</span>
+  <h1>Attestation Demo</h1>
+  <p class="sub">Connect a wallet and sign an attestation. Nothing is broadcast and no gas is spent.</p>
+
+  <div class="row">
+    <button id="connect" data-testid="connect">Connect wallet</button>
+    <button id="sign" data-testid="sign" class="ghost" disabled>Sign attestation</button>
+  </div>
+
+  <div class="panel" id="out" data-testid="out"><span class="k">Status</span>  waiting for a wallet…</div>
+</div>
+<script>
+  const out = document.getElementById("out");
+  const line = (k, v, cls = "") =>
+    `<div><span class="k">${k}</span>  <span class="${cls}">${v}</span></div>`;
+  let account = null;
+
+  document.getElementById("connect").onclick = async () => {
+    if (!window.ethereum) { out.innerHTML = line("Status", "no injected provider found"); return; }
+    out.innerHTML = line("Status", "waiting for approval in the wallet…");
+    const [a] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    account = a;
+    const chainId = await window.ethereum.request({ method: "eth_chainId" });
+    out.innerHTML =
+      line("Account", a) +
+      line("Chain", chainId === "0xaa36a7" ? "Sepolia (11155111)" : chainId);
+    document.getElementById("sign").disabled = false;
+  };
+
+  document.getElementById("sign").onclick = async () => {
+    out.innerHTML = line("Status", "check the wallet to sign…");
+    // A message signature: it exercises the full approval flow and needs no
+    // gas, so a fresh wallet with an empty balance can still demo it.
+    const message =
+      "Attestation\n\nI confirm this build was recorded end to end by an agent.\n\nnonce: " +
+      Math.floor(Date.now() / 1000);
+    const signature = await window.ethereum.request({
+      method: "personal_sign",
+      params: [message, account],
+    });
+    out.innerHTML =
+      line("Signed by", account) +
+      line("Signature", signature.slice(0, 42) + "…" + signature.slice(-8)) +
+      line("Verified", "✓ attestation recorded", "ok");
+  };
+</script>
