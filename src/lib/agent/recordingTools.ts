@@ -158,7 +158,18 @@ export async function startRecording(
 	}
 
 	try {
-		window.electronAPI.selectSource({ id: args.sourceId } as never);
+		// The whole source, not just its id. Cursor telemetry normalises each
+		// sample against the captured display's bounds, and it finds that
+		// display through selectedSource.display_id. Passing only the id left
+		// that undefined, so every sample fell back to "whichever display the
+		// pointer is nearest" — which is the wrong display the moment there is
+		// more than one, and the drawn cursor ends up pointing somewhere the
+		// pointer never was.
+		const known = await window.electronAPI.getSources?.({ types: ["screen", "window"] });
+		const match = (
+			known as Array<{ id: string; name?: string; display_id?: string }> | undefined
+		)?.find((source) => source.id === args.sourceId);
+		window.electronAPI.selectSource((match ?? { id: args.sourceId }) as never);
 	} catch (error) {
 		return fail(
 			"unknown_source",

@@ -260,6 +260,15 @@ export function resolveCursor(
 	let cy: number;
 	if (spring) {
 		const config = getCursorSpringConfig(settings.smoothing * 2);
+		// The spring is born at the middle of the frame, so on its very first
+		// step it would glide in from the centre toward wherever the pointer
+		// actually was — a second or so at the head of every take where the
+		// cursor points at nothing. Seed it with the first real sample instead;
+		// smoothing is for movement between samples, not for arriving.
+		if (spring.lastMs === null) {
+			resetSpringState(spring.x, now.cx);
+			resetSpringState(spring.y, now.cy);
+		}
 		cx = clamp01(stepSpringValue(spring.x, now.cx, deltaMs, config));
 		cy = clamp01(stepSpringValue(spring.y, now.cy, deltaMs, config));
 	} else {
