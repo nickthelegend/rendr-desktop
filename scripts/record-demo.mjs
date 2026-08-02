@@ -260,8 +260,9 @@ async function runStep(rec, step) {
 		// A backgrounded tab is throttled, so its video holds the last frame it
 		// drew — front it first, or the inset is cut from a window in which the
 		// wallet was still showing whatever it showed before the request.
-		await rec.wallet.bringToFront();
-		await rec.page.waitForTimeout(1200);
+		// No bringToFront: separate windows are both visible, and fronting one
+		// is what used to stop the other painting.
+		await rec.page.waitForTimeout(900);
 		rec.marks.push({ kind: step.approve, atMs: rec.now });
 		// Let the dialog sit on screen long enough to be worth cutting to.
 		await rec.page.waitForTimeout(step.read ?? 2000);
@@ -270,7 +271,6 @@ async function runStep(rec, step) {
 			step.pattern ? new RegExp(step.pattern, "i") : undefined,
 		);
 		if (clicked) console.log(`  approved ${step.approve} — clicked "${clicked}"`);
-		await rec.page.bringToFront();
 		await rec.dwell(step.after ?? 1500);
 		return;
 	}
@@ -304,9 +304,35 @@ async function runStep(rec, step) {
  * its own track. That track becomes a picture-in-picture inset at build time,
  * which is a better shot than a screen capture of a real side panel could be.
  */
-async function openWallet(ctx, id, password) {
-	const page = await ctx.newPage();
-	await page.goto(`chrome-extension://${id}/index.html`, { waitUntil: "domcontentloaded" });
+async function openWallet(ctx, id, password, surface = "popup-init.html", host = null) {
+	// Opened as its own OS window, not another tab.
+	//
+	// Chrome does not paint a backgrounded tab, and Playwright records whatever
+	// the page composited — so with both in one window, fronting the wallet to
+	// render a request left the dApp's recording frozen and half-grey for the
+	// rest of the take. Two windows are both visible, so both keep painting and
+	// neither has to be hidden for the other to work.
+	const url = `chrome-extension://${id}/${surface}`;
+	let page = null;
+	if (host) {
+		// Target.createTarget with newWindow, over CDP. window.open cannot reach
+		// an extension page — index.html is not web-accessible, so the opened
+		// window just shows an error — and context.newPage only ever makes a tab.
+		try {
+			const cdp = await ctx.newCDPSession(host);
+			const opened = ctx.waitForEvent("page", { timeout: 20000 });
+			await cdp.send("Target.createTarget", { url, newWindow: true, width: 460, height: 780 });
+			page = await opened;
+			await cdp.detach().catch(() => {});
+		} catch {
+			page = null;
+		}
+	}
+	if (!page) {
+		page = await ctx.newPage();
+		await page.goto(url, { waitUntil: "domcontentloaded" });
+	}
+	await page.waitForLoadState("domcontentloaded").catch(() => {});
 	await page.waitForTimeout(2500);
 	const field = page.locator("input[type=password]").first();
 	if (password && (await field.count())) {
@@ -328,7 +354,6 @@ async function openWallet(ctx, id, password) {
  * outcome that silently ruins a take.
  */
 async function approve(wallet, pattern) {
-	await wallet.bringToFront();
 	await wallet.waitForTimeout(500);
 	const want = pattern ?? /^(connect|approve|confirm|sign)$/i;
 	const deadline = Date.now() + 15000;
@@ -361,6 +386,34 @@ async function approve(wallet, pattern) {
 		.catch(() => []);
 	console.warn(`  ! no approve button matched ${want}. On screen: ${seen.join(" / ") || "nothing"}`);
 	return null;
+}
+
+
+/**
+ * The unpacked extension's id, read off its background worker.
+ *
+ * Real Chrome registers the MV3 service worker lazily — it can take well over
+ * the 20s a single waitForEvent allowed, and it may already have fired before
+ * we start listening. So poll for either, and open a page from the extension to
+ * prod it awake if it is still asleep.
+ */
+async function findExtensionId(ctx, timeoutMs = 90000) {
+	const deadline = Date.now() + timeoutMs;
+	let poke = null;
+	while (Date.now() < deadline) {
+		const worker = ctx.serviceWorkers()[0] ?? ctx.backgroundPages?.()[0];
+		if (worker) {
+			if (poke) await poke.close().catch(() => {});
+			return new URL(worker.url()).host;
+		}
+		if (!poke && Date.now() > deadline - timeoutMs + 8000) {
+			// Loading any page tends to wake a lazy worker.
+			poke = await ctx.newPage().catch(() => null);
+			await poke?.goto("about:blank").catch(() => {});
+		}
+		await new Promise((r) => setTimeout(r, 1000));
+	}
+	throw new Error("The extension's background worker never started, so its id is unknown.");
 }
 
 async function main() {
@@ -397,6 +450,13 @@ async function main() {
 		// window is Playwright's own, not the user's screen, so this still does
 		// not take over the machine.
 		context = await chromium.launchPersistentContext(runProfile, {
+			// Bundled Chromium, deliberately not channel:"chrome". Chrome 137
+			// removed --load-extension, so real Chrome silently never loads the
+			// extension and its background worker never starts. If launching
+			// times out at 180s instead, the headed binary is corrupt: reinstall
+			// with `rm -rf ~/Library/Caches/ms-playwright/chromium-* && npx
+			// playwright install chromium`, because a plain install only refetches
+			// the headless shell when the directory already exists.
 			headless: false,
 			viewport: size,
 			deviceScaleFactor: board.deviceScaleFactor ?? 2,
@@ -413,15 +473,18 @@ async function main() {
 				// drawn cursor comes from telemetry in the original frame's
 				// coordinates, so moving the picture and not the overlay puts the
 				// pointer beside the button it clicked instead of on it.
-				`--window-size=${size.width + 160},${size.height + 220}`,
+				// Room for the viewport *and* the side panel the wallet opens. The
+				// panel takes ~420px out of the window the moment it appears, and
+				// it appears part-way through the take — so a window sized only
+				// for the viewport gives a recording that is full width at the
+				// start and a third dead grey after the wallet opens, which no
+				// single crop can fix.
+				`--window-size=${size.width + 520},${size.height + 200}`,
 			],
 		});
-		const worker =
-			context.serviceWorkers()[0] ??
-			(await context.waitForEvent("serviceworker", { timeout: 20000 }));
 		// No manifest key, so the unpacked id is derived from the path and has
 		// to be read at runtime rather than written down.
-		extensionId = new URL(worker.url()).host;
+		extensionId = await findExtensionId(context);
 		console.log(`wallet extension ${extensionId}`);
 	} else {
 		browser = await chromium.launch({ headless: board.headless !== false });
@@ -441,23 +504,31 @@ async function main() {
 		});
 	}
 
-	// The clock starts before either page, so both videos can be placed on it.
-	// Each page's recording begins when that page is created, and the wallet is
-	// created several seconds after the dApp — so a mark taken on the shared
-	// clock points at a different moment in each file. Without the offset the
-	// wallet inset lands seconds early and shows whatever the wallet happened
-	// to be doing then, which is how it kept showing its home screen.
+	// The dApp page is created first because it is the opener for the wallet
+	// window, and the clock starts with it so its recording begins at frame one.
 	const clockStart = Date.now();
 	const page = await context.newPage();
-	const pageStartedMs = Date.now() - clockStart;
+	const pageStartedMs = 0;
+	// Loaded before the wallet opens, not after. Opening and unlocking the wallet
+	// takes ten seconds or so, and the dApp records that whole time — so leaving
+	// it on about:blank until afterwards put ten seconds of black at the head of
+	// every take.
+	if (board.url) {
+		await page.goto(board.url, { waitUntil: "domcontentloaded" });
+		await page.waitForTimeout(600);
+	}
+	const walletCreatedAt = Date.now();
 	const walletPage = wallet
-		? await openWallet(context, extensionId, process.env[wallet.passwordEnv ?? "WALLETCHAN_PASSWORD"])
+		? await openWallet(
+				context,
+				extensionId,
+				process.env[wallet.passwordEnv ?? "WALLETCHAN_PASSWORD"],
+				wallet.surface ?? "popup-init.html",
+				page,
+			)
 		: null;
-	const walletStartedMs = walletPage ? Date.now() - clockStart : 0;
-	if (walletPage) await page.bringToFront();
+	const walletStartedMs = walletPage ? walletCreatedAt - clockStart : 0;
 
-	// Video encoding begins with the context, so the clock starts here and the
-	// first beat is deliberately given a moment to settle.
 	// Checked after the wallet exists, because the side panel is what shrinks
 	// the page — measuring before it opens always reports the size we asked for.
 	// The extension's side panel takes part of the window, so the page renders
@@ -466,14 +537,6 @@ async function main() {
 	// measured and handed to the builder instead, which crops to it and rescales
 	// the pointer path by the same factor — crop the picture without moving the
 	// overlay and the cursor lands beside every button it presses.
-	const real = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
-	contentScale = { x: real[0] / size.width, y: real[1] / size.height };
-	if (contentScale.x < 0.995 || contentScale.y < 0.995) {
-		console.log(
-			`  page renders ${real[0]}x${real[1]} of a ${size.width}x${size.height} frame — the builder will crop to it`,
-		);
-	}
-
 	const rec = new Recorder(page, size, clockStart);
 	rec.wallet = walletPage;
 
@@ -524,6 +587,9 @@ async function main() {
 
 	await rec.dwell(board.tail ?? 1200);
 	const totalMs = rec.now;
+
+	const endSize = await page.evaluate(() => [window.innerWidth, window.innerHeight, window.outerWidth, document.documentElement.clientWidth]).catch(() => null);
+	console.log('  end-of-take page size:', JSON.stringify(endSize), 'video', size.width + 'x' + size.height);
 
 	// Grab the handles before closing: the files are only finalised on close,
 	// but the handle has to be taken while the page still exists.

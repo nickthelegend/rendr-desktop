@@ -1,14 +1,42 @@
 import { chromium } from "playwright";
-const EXT = "/private/tmp/claude-501/-Volumes-Extreme-SSD-Projects-rendr-claude/7f4e24d8-5734-4fec-bad4-fdc3ddc85911/scratchpad/walletchan";
-const S = "/private/tmp/claude-501/-Volumes-Extreme-SSD-Projects-rendr-claude/7f4e24d8-5734-4fec-bad4-fdc3ddc85911/scratchpad";
+const EXT = process.env.WALLET_EXT ?? "./vendor/walletchan";
+const S = process.env.SHOTS ?? "/tmp/wc-shots";
 const PASS = "DemoOnly!Sepolia7";
 
+
+/**
+ * The unpacked extension's id, read off its background worker.
+ *
+ * Real Chrome registers the MV3 service worker lazily — it can take well over
+ * the 20s a single waitForEvent allowed, and it may already have fired before
+ * we start listening. So poll for either, and open a page from the extension to
+ * prod it awake if it is still asleep.
+ */
+async function findExtensionId(ctx, timeoutMs = 90000) {
+	const deadline = Date.now() + timeoutMs;
+	let poke = null;
+	while (Date.now() < deadline) {
+		const worker = ctx.serviceWorkers()[0] ?? ctx.backgroundPages?.()[0];
+		if (worker) {
+			if (poke) await poke.close().catch(() => {});
+			return new URL(worker.url()).host;
+		}
+		if (!poke && Date.now() > deadline - timeoutMs + 8000) {
+			// Loading any page tends to wake a lazy worker.
+			poke = await ctx.newPage().catch(() => null);
+			await poke?.goto("about:blank").catch(() => {});
+		}
+		await new Promise((r) => setTimeout(r, 1000));
+	}
+	throw new Error("The extension's background worker never started, so its id is unknown.");
+}
+
+await (await import("node:fs/promises")).mkdir(S,{recursive:true});
 const ctx = await chromium.launchPersistentContext("./.wallet-profile", {
   headless: false, viewport: { width: 1280, height: 800 },
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
 });
-const sw = ctx.serviceWorkers()[0] ?? await ctx.waitForEvent("serviceworker", { timeout: 20000 });
-const id = new URL(sw.url()).host;
+const id = await findExtensionId(ctx);
 console.log("EXT_ID=" + id);
 const page = await ctx.newPage();
 await page.goto(`chrome-extension://${id}/onboarding.html`, { waitUntil: "domcontentloaded" });

@@ -49,3 +49,6 @@ gpu-export-probe.mp4
 # Throwaway wallet profile — contains an unlocked keystore
 .wallet-profile/
 demo-out/
+
+# Unpacked wallet extension for demo recording (re-fetchable, ~28MB)
+vendor/walletchan/

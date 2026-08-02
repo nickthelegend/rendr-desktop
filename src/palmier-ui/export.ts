@@ -21,11 +21,9 @@ import {
 	type CursorFrame,
 	type CursorSettings,
 	type CursorSpringState,
-	capturedPointerPatch,
 	createCursorSpringState,
 	cursorFill,
 	cursorPath,
-	rawCursorAt,
 	resolveCursor,
 	ringAt,
 } from "./cursor";
@@ -333,14 +331,19 @@ export async function renderFrame(
 		context.scale(camera.scale, camera.scale);
 	}
 
-	// The clip whose captured pixels contain the hardware pointer. macOS burns
-	// it into every take regardless of the capture constraint, so it is painted
-	// over during that clip's draw — otherwise it shows beside the drawn cursor
-	// whenever the pointer moves, because the drawn one is smoothed and trails.
-	const maskedHost =
-		cursor && cursor.telemetry.length > 0
-			? visible.find((clip) => clip.mediaType === "video")
-			: undefined;
+	// No hardware pointer is masked here, deliberately.
+	//
+	// An earlier version painted over the captured cursor with the pixels beside
+	// it, on the belief that macOS burns the pointer into every take regardless
+	// of the capture constraint. It does not: ScreenCaptureKit's showsCursor is
+	// false in the recorder, and Recordly — whose Swift recorder and cursor
+	// monitor are byte-identical to this one — draws its cursor with no masking
+	// of any kind and has no double pointer.
+	//
+	// So the mask had nothing to cover, and copied a cursor-sized block of
+	// neighbouring pixels over clean footage on every frame. That block is what
+	// read as a second, smaller pointer sitting beside the drawn one, and as
+	// clicks landing slightly off from where they were made.
 
 	// Bottom track last in the array paints first, so index 0 ends up on top.
 	for (const raw of [...visible].reverse()) {
@@ -554,28 +557,6 @@ export async function renderFrame(
 						drawW,
 						drawH,
 					);
-					if (raw === maskedHost && cursor) {
-						// Paint over the captured hardware pointer with the
-						// pixels beside it, before grading so the patch is
-						// graded like everything around it.
-						const point = rawCursorAt(cursor.telemetry, sourceMs);
-						const patch = point
-							? capturedPointerPatch(point, naturalW, naturalH, { sx, sy, sw, sh })
-							: null;
-						if (patch) {
-							context.drawImage(
-								source,
-								patch.from.x,
-								patch.from.y,
-								patch.rect.w,
-								patch.rect.h,
-								(boxW - drawW) / 2 + (patch.rect.x - sx) * scale,
-								(boxH - drawH) / 2 + (patch.rect.y - sy) * scale,
-								patch.rect.w * scale,
-								patch.rect.h * scale,
-							);
-						}
-					}
 					if (luts || pixels) {
 						applyLutsToRegion(context, boxW, boxH, luts, pixels);
 					}

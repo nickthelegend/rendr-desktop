@@ -6,7 +6,7 @@
   "colorScheme": "dark",
   "settle": 2000,
   "wallet": {
-    "extension": "/private/tmp/claude-501/-Volumes-Extreme-SSD-Projects-rendr-claude/7f4e24d8-5734-4fec-bad4-fdc3ddc85911/scratchpad/walletchan",
+    "extension": "./vendor/walletchan",
     "profile": "./.wallet-profile",
     "passwordEnv": "WALLETCHAN_PASSWORD"
   },

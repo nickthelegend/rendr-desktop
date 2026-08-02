@@ -41,6 +41,45 @@ async function call(name, args = {}) {
 
 const say = (message) => console.log(message);
 
+/**
+ * How much of a recording's width the page actually painted, 0-1.
+ *
+ * Grabs one frame as raw pixels and walks in from the right edge until the flat
+ * grey the browser pads with gives way to real content. Sampled down several
+ * rows so a genuinely grey UI element on one line cannot fool it.
+ */
+async function measureContent(file, width, height) {
+	const { execFile } = await import("node:child_process");
+	const { promisify } = await import("node:util");
+	// Sampled at several points, not one. The padding only appears once the
+	// wallet docks its panel — part-way through — so a single early sample
+	// always reports a full-width frame and the crop never happens.
+	let narrowest = 1;
+	for (const t of [6, 20, 32, 44, 54]) {
+		let raw;
+		try {
+			const { stdout } = await promisify(execFile)(
+				"ffmpeg",
+				["-v", "error", "-ss", String(t), "-i", file, "-frames:v", "1", "-f", "rawvideo",
+				 "-pix_fmt", "rgb24", "-"],
+				{ encoding: "buffer", maxBuffer: width * height * 3 + 1024 },
+			);
+			raw = stdout;
+		} catch {
+			continue;
+		}
+		if (raw.length < width * height * 3) continue;
+		const at = (x, y) => raw[(y * width + x) * 3];
+		const rows = [Math.round(height * 0.1), Math.round(height * 0.5), Math.round(height * 0.9)];
+		const isPad = (x) => rows.every((y) => Math.abs(at(x, y) - 128) < 12);
+		if (!isPad(width - 1)) continue;
+		let edge = width - 1;
+		while (edge > width * 0.4 && isPad(edge - 1)) edge -= 1;
+		narrowest = Math.min(narrowest, edge / width);
+	}
+	return Number(narrowest.toFixed(4));
+}
+
 async function main() {
 	const dir = resolve(process.argv[2] ?? "demo-out");
 	const wantExport = process.argv.includes("--export");
@@ -133,39 +172,59 @@ async function main() {
 			// original aspect — otherwise it stretches.
 			await call("set_clip_properties", {
 				clipIds: insetIds,
-				transform: { centerX: 0.78, centerY: 0.5, width: 0.30, height: 0.88 },
-				edgeRounding: 0.05,
-				fadeInFrames: 6,
-				fadeOutFrames: 6,
+				transform: { centerX: 0.5, centerY: 0.5, width: 0.42, height: 1 },
+				edgeRounding: 0.04,
+				fadeInFrames: 5,
+				fadeOutFrames: 5,
 			});
 		}
 		say(`wallet     ${placed.length} inset(s): ${placed.map((p) => `${p.kind}@${p.atSeconds}s`).join(", ")}`);
 	}
 
-	// Crop the dead space the side panel left in the frame, and rescale the
-	// pointer path by the same factor so it still points at what it clicked.
-	const scale = script.contentScale ?? { x: 1, y: 1 };
-	const cropped = scale.x < 0.995 || scale.y < 0.995;
-	if (cropped) {
+	// Crop to the region the page actually painted, keeping 16:9.
+	//
+	// The wallet docks a side panel into the window the moment a dApp asks to
+	// connect. That is the wallet's own behaviour and cannot be turned off from
+	// here, so from that point the recording paints the page into roughly the
+	// left two thirds and pads the rest with flat grey. The page is fine — it
+	// measures 1280x720 throughout — but the recording is not, and no amount of
+	// window sizing changes it.
+	//
+	// So the frame is cropped to the painted region, and then trimmed top and
+	// bottom to bring that region back to 16:9 rather than letterboxing a
+	// squarish picture into a widescreen timeline.
+	const painted = await measureContent(join(dir, "demo.webm"), 1280, 720);
+	let cy0 = 0;
+	let cyScale = 1;
+	if (painted && painted < 0.995) {
+		// 16:9 out of a (painted x 1) region: keep painted*9/16 of the height.
+		const keepY = Math.min(1, (painted * 720) / ((1280 * painted) / (16 / 9)));
+		const keep = Math.min(1, (painted * 1280) / (16 / 9) / 720);
+		const band = Math.min(0.9, keep);
+		cy0 = (1 - band) / 2;
+		cyScale = band;
+		void keepY;
 		await call("crop_clips", {
 			clipIds: [clipId],
-			right: Number((1 - scale.x).toFixed(4)),
-			bottom: Number((1 - scale.y).toFixed(4)),
+			right: Number((1 - painted).toFixed(4)),
+			top: Number(cy0.toFixed(4)),
+			bottom: Number(cy0.toFixed(4)),
 		});
 		await call("set_clip_properties", {
 			clipIds: [clipId],
-			transform: { centerX: 0.5, centerY: 0.5, width: 1 / scale.x, height: 1 / scale.y },
+			transform: { centerX: 0.5, centerY: 0.5, width: 1, height: 1 },
 		});
-		say(`framing    cropped to the ${Math.round(scale.x * 100)}% of frame the page actually used`);
+		say(
+			`framing    page painted ${Math.round(painted * 100)}% of the width; cropped to it at 16:9`,
+		);
 	}
 
-	const points = cropped
-		? telemetry.map((point) => ({
-				...point,
-				cx: Math.min(1, point.cx / scale.x),
-				cy: Math.min(1, point.cy / scale.y),
-			}))
-		: telemetry;
+	// A pointer sample is a fraction of the page, and the page maps onto exactly
+	// the region just cropped to — so x needs no change, but y does, because the
+	// crop threw away a band top and bottom.
+	const points = telemetry.map((point) =>
+		cyScale === 1 ? point : { ...point, cy: Math.min(1, Math.max(0, (point.cy - cy0) / cyScale)) },
+	);
 	const imported = await call("import_telemetry", { points });
 	say(`pointer    ${imported.points} samples, ${imported.clicks} clicks`);
 	for (const warning of imported.warnings ?? []) say(`  ! ${warning}`);
