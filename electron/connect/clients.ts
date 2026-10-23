@@ -9,11 +9,14 @@
 
 import { execFile } from "node:child_process";
 import {
+	chmodSync,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -102,11 +105,17 @@ export function mergeJsonServer(file: string, container: string, entry: unknown)
 	) as Record<string, unknown>;
 	config[container] = { ...servers, [SERVER_NAME]: entry };
 	mkdirSync(path.dirname(file), { recursive: true });
+	// Write through a symlink (dotfile managers keep configs in a repo and link
+	// them in) rather than replacing the link with a plain file, and keep the
+	// file's mode — a config holding other servers' secrets may be 0600.
+	const target = existsSync(file) ? realpathSync(file) : file;
+	const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o644;
 	const backup = `${file}.rendr-backup`;
-	if (existsSync(file) && !existsSync(backup)) copyFileSync(file, backup);
-	const temp = `${file}.rendr-tmp`;
-	writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`);
-	renameSync(temp, file);
+	if (existsSync(target) && !existsSync(backup)) copyFileSync(target, backup);
+	const temp = `${target}.rendr-tmp`;
+	writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, { mode });
+	chmodSync(temp, mode);
+	renameSync(temp, target);
 }
 
 function jsonHas(file: string, container: string): boolean {

@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -59,6 +69,21 @@ describe("mergeJsonServer", () => {
 			servers: { rendr: { type: "http", url: "u" } },
 		});
 		expect(existsSync(`${file}.rendr-backup`)).toBe(false);
+	});
+
+	it("writes through a symlinked config and keeps its permissions", () => {
+		const { home } = sandbox();
+		const real = path.join(home, "dotfiles-mcp.json");
+		writeFileSync(real, JSON.stringify({ mcpServers: { secret: { env: { TOKEN: "x" } } } }), {
+			mode: 0o600,
+		});
+		chmodSync(real, 0o600);
+		const link = path.join(home, "mcp.json");
+		symlinkSync(real, link);
+		mergeJsonServer(link, "mcpServers", { url: "u" });
+		expect(lstatSync(link).isSymbolicLink()).toBe(true);
+		expect(JSON.parse(readFileSync(real, "utf8")).mcpServers.rendr).toEqual({ url: "u" });
+		expect(statSync(real).mode & 0o777).toBe(0o600);
 	});
 
 	it("refuses to rewrite a config with comments rather than lose them", () => {

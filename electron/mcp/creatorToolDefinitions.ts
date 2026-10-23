@@ -204,7 +204,7 @@ export const CREATOR_TOOLS: AgentTool[] = [
 	{
 		name: "create_thumbnail",
 		description:
-			"Makes a YouTube-style thumbnail from the footage: the speaker cut out (from the moment they're closest to camera, unless atSeconds is given) with a white sticker outline, on a bold backdrop, next to a huge stroked title with highlight words in an accent colour. Needs analyze_footage (runs it if missing). The PNG lands in the media library, optionally also at outputPath, and a preview comes back so you can judge it — make two or three variants and let the user pick. format 'youtube' is 1280×720; 'shorts' is a 1080×1920 cover with the title on top.",
+			"Makes a YouTube-style thumbnail from the footage: the speaker cut out (from the moment they're closest to camera, unless atSeconds is given) with a white sticker outline, on a bold backdrop, next to a huge stroked title with highlight words in an accent colour. Needs analyze_footage (runs it if missing). The PNG lands in the media library and in ~/Pictures/Rendr (never overwriting an earlier variant), and a preview comes back so you can judge it — make two or three variants and let the user pick. format 'youtube' is 1280×720; 'shorts' is a 1080×1920 cover with the title on top.",
 		inputSchema: object(
 			{
 				title: {
@@ -242,10 +242,6 @@ export const CREATOR_TOOLS: AgentTool[] = [
 				},
 				format: { type: "string", enum: ["youtube", "shorts"] },
 				name: { type: "string" },
-				outputPath: {
-					type: "string",
-					description: "Also write the PNG here (absolute path).",
-				},
 				waitSeconds: WAIT_SECONDS,
 			},
 			["title"],

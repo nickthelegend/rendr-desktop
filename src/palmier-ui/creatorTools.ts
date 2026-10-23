@@ -933,22 +933,6 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 			if (saved?.ok && saved.path) file.rendrSourcePath = saved.path;
 			const [added] = await api.importMedia([file]);
 
-			let savedTo: string | undefined;
-			const outputPath = asString(args.outputPath);
-			if (outputPath) {
-				const bridge = window.electronAPI;
-				const written = await bridge?.writeExportedVideoToPath?.(
-					await blob.arrayBuffer(),
-					outputPath,
-				);
-				if (!written?.success)
-					return fail(
-						"write_failed",
-						written?.message ?? `Couldn't write ${outputPath}.`,
-					);
-				savedTo = written.path;
-			}
-
 			// A small copy comes back so the agent can look at what it made.
 			const preview = document.createElement("canvas");
 			preview.width = vertical ? 360 : 640;
@@ -965,7 +949,7 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 								name: added?.name,
 								size: [spec.width, spec.height],
 								speakerFrom: Math.round(at * 100) / 100,
-								savedTo: savedTo ?? (saved?.ok ? saved.path : undefined),
+								savedTo: saved?.ok ? saved.path : undefined,
 								note: "In the media library. Tweak title / highlight / background / side and call again for variants.",
 							},
 							null,

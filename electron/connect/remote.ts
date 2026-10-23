@@ -23,6 +23,47 @@ import { attachMcpServer, detachMcpServer, dispatchTool } from "../mcp/index";
 
 export const REMOTE_PORT = 19791;
 
+/** Argument names that point at this computer's files. */
+const PATH_KEYS = new Set(["path", "outputPath", "filePath", "sourcePath", "dir", "directory"]);
+
+/** Tools an agent outside this computer may not start, whatever it asks. */
+const LOCAL_ONLY_TOOLS: Record<string, string> = {
+	start_recording:
+		"Screen recording can only be started from this computer, not over remote access. Ask the user to start it in Rendr.",
+};
+
+function namesALocalPath(value: unknown, depth = 0): string | null {
+	if (!value || typeof value !== "object" || depth > 6) return null;
+	for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+		if (PATH_KEYS.has(key) && typeof child === "string" && child.trim()) return key;
+		const nested = namesALocalPath(child, depth + 1);
+		if (nested) return nested;
+	}
+	return null;
+}
+
+/**
+ * What an agent reaching Rendr through the tunnel isn't allowed to do. A token
+ * proves the caller is someone the user handed a URL to — not that it should
+ * read ~/.ssh into the media library, write over a file, or switch on screen
+ * capture. Those stay with the person at the keyboard (or a local agent);
+ * everything else, including importing by https URL, works remotely.
+ */
+export function remotePolicy(name: string, args: Record<string, unknown>): string | null {
+	if (LOCAL_ONLY_TOOLS[name]) return LOCAL_ONLY_TOOLS[name];
+	const key = namesALocalPath(args);
+	if (key) {
+		return `'${key}' names a file on the user's computer, which remote access doesn't allow. Import media by https URL instead, or ask the user to do it locally.`;
+	}
+	return null;
+}
+
+async function remoteDispatch(name: string, args: Record<string, unknown>) {
+	const refusal = remotePolicy(name, args);
+	if (refusal) throw new Error(refusal);
+	return dispatchTool(name, args);
+}
+
 export type RemoteStatus = "off" | "starting" | "on" | "error";
 
 export interface RemoteState {
@@ -73,7 +114,9 @@ function writeStore(value: Stored): void {
 	writeFileSync(storeFile(), JSON.stringify(value, null, 2), { mode: 0o600 });
 }
 
-const QUICK_TUNNEL_URL = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
+// A quick tunnel's address is a few hyphenated words; cloudflared's own API
+// host (named in its error output) must not be mistaken for one.
+const QUICK_TUNNEL_URL = /https:\/\/(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com/i;
 
 export class RemoteAccess {
 	private server: McpHttpServer | null = null;
@@ -110,7 +153,7 @@ export class RemoteAccess {
 
 	private async ensureServer(): Promise<void> {
 		if (this.server) return;
-		const server = new McpHttpServer(dispatchTool, REMOTE_PORT, {
+		const server = new McpHttpServer(remoteDispatch, REMOTE_PORT, {
 			token: () => this.store.token,
 			publicUrl: () => this.snapshot().restBase,
 		});
