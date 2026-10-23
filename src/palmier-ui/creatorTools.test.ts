@@ -442,3 +442,47 @@ describe("punch-ins on a face-followed clip", () => {
 		expect(restored.transform.width).toBeCloseTo(3.16);
 	});
 });
+
+describe("remove_words keeps every word it didn't cut", () => {
+	it("doesn't drop a zero-length word from the rebuilt captions", async () => {
+		// Local Whisper hands back some tokens with no duration ("punch" here).
+		// Cutting a different word used to rebuild the captions without them.
+		const words = [
+			{ text: "is", startFrame: 0, endFrame: 8 },
+			{ text: "punch", startFrame: 10, endFrame: 10 },
+			{ text: "ins.", startFrame: 12, endFrame: 20 },
+			{ text: "I", startFrame: 30, endFrame: 34 },
+			{ text: "think", startFrame: 34, endFrame: 42 },
+			{ text: "I", startFrame: 44, endFrame: 48 },
+			{ text: "think", startFrame: 48, endFrame: 56 },
+		];
+		const caption = withDefaults({
+			id: "cap",
+			name: "Captions",
+			mediaType: "text",
+			startFrame: 0,
+			endFrame: 60,
+			captionGroupId: "g",
+			captionWords: words,
+		});
+		const start = timelineWith([footageClip({ endFrame: 60 })]);
+		start.tracks.unshift({
+			id: "trk-cc-g",
+			name: "CC",
+			kind: "video",
+			muted: false,
+			hidden: false,
+			clips: [caption],
+		});
+		const { api, commit } = fakeApi(start);
+		const { createAgentTools } = await import("./agentTools");
+		const result = await createAgentTools(api).remove_words({
+			words: [[3, 4]],
+			cutAggressiveness: "tight",
+		});
+		expect(result.isError).toBeFalsy();
+		const { transcriptWords } = await import("./captions");
+		const after = transcriptWords(committed(commit, start)).map((word) => word.text);
+		expect(after).toEqual(["is", "punch", "ins.", "I", "think"]);
+	});
+});

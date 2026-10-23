@@ -4015,14 +4015,24 @@ export function createAgentTools(api: EditorApi) {
 					// halves whose text no longer matches. Rebuild them instead.
 					for (const groupId of groups) next = removeCaptionGroup(next, groupId);
 
+					// Every surviving word comes back, even one with no length:
+					// local Whisper gives some tokens zero duration, and a word
+					// whose start fell inside a cut ends up "ending" before it
+					// starts. Dropping those silently deleted words from the
+					// captions that were never cut from the audio.
+					const frameMs = 1000 / next.fps;
 					const kept = survivors
-						.map((word) => ({
-							text: word.text,
-							startMs:
-								((word.startFrame - shiftAt(word.startFrame)) / next.fps) * 1000,
-							endMs: ((word.endFrame - shiftAt(word.endFrame)) / next.fps) * 1000,
-						}))
-						.filter((word) => word.endMs > word.startMs)
+						.map((word) => {
+							const startMs =
+								((word.startFrame - shiftAt(word.startFrame)) / next.fps) * 1000;
+							const endMs =
+								((word.endFrame - shiftAt(word.endFrame)) / next.fps) * 1000;
+							return {
+								text: word.text,
+								startMs,
+								endMs: Math.max(endMs, startMs + frameMs),
+							};
+						})
 						.sort((a, b) => a.startMs - b.startMs);
 
 					if (kept.length === 0) return next;
