@@ -30,6 +30,16 @@ describe("findRetakes", () => {
 		expect(retake.keptText.startsWith("so today we're going to")).toBe(true);
 	});
 
+	it("finds a restart Whisper joined to its retry with a comma", () => {
+		// Real output from a local transcription of a take with a restart in it.
+		const words = transcript(
+			"Hi everyone, so today we are going to, so today we are going to look at 3 editing tricks.",
+		);
+		const [retake] = findRetakes(words, { fps });
+		expect(retake).toMatchObject({ kind: "restart", removeFrom: 2, removeTo: 7 });
+		expect(retake.removedText).toBe("so today we are going to,");
+	});
+
 	it("cuts both earlier attempts when a line is tried three times", () => {
 		const words = transcript(
 			"The first thing you | the first thing you need | the first thing you need is a hook.",
@@ -49,6 +59,9 @@ describe("findRetakes", () => {
 
 	it("leaves deliberate repetition and different sentences alone", () => {
 		expect(findRetakes(transcript("No no, that's very very wrong."), { fps })).toEqual([]);
+		expect(
+			findRetakes(transcript("We want to win, we want to grow, we want to last."), { fps }),
+		).toEqual([]);
 		expect(
 			findRetakes(
 				transcript("So today we look at hooks. | So tomorrow we look at endings."),
@@ -71,6 +84,8 @@ describe("findRetakes", () => {
 	it("compares words without case or punctuation, and finds sentence starts", () => {
 		expect(normalizeWord("Today,")).toBe("today");
 		expect(normalizeWord("We’re")).toBe("were");
-		expect(sentenceStarts(transcript("One two. Three four | five"), fps)).toEqual([0, 2, 4]);
+		expect(sentenceStarts(transcript("One two. Three four | five, six"), fps)).toEqual([
+			0, 2, 4, 5,
+		]);
 	});
 });

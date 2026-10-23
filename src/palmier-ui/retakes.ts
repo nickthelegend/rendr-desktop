@@ -46,7 +46,12 @@ export function normalizeWord(text: string): string {
 		.replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
-/** Where sentences start: the first word, and every word after a full stop or a long pause. */
+/**
+ * Where a clause can start over: the first word, and every word after a full
+ * stop, a comma or dash, or a pause. Whisper rarely ends an abandoned attempt
+ * with a full stop — "so today we're going to, so today we're going to look
+ * at…" comes back as one sentence with a comma where the speaker restarted.
+ */
 export function sentenceStarts(words: readonly RetakeWord[], fps: number): number[] {
 	const starts: number[] = [];
 	for (let position = 0; position < words.length; position++) {
@@ -55,9 +60,9 @@ export function sentenceStarts(words: readonly RetakeWord[], fps: number): numbe
 			continue;
 		}
 		const previous = words[position - 1];
-		const endsSentence = /[.!?…]["')\]]*$/.test(previous.text.trim());
-		const pause = (words[position].startFrame - previous.endFrame) / fps > 0.6;
-		if (endsSentence || pause) starts.push(position);
+		const endsClause = /[.!?…,;:—–-]["')\]]*$/.test(previous.text.trim());
+		const pause = (words[position].startFrame - previous.endFrame) / fps > 0.35;
+		if (endsClause || pause) starts.push(position);
 	}
 	return starts;
 }
@@ -68,6 +73,16 @@ function textOf(words: readonly RetakeWord[], from: number, to: number): string 
 		.map((word) => word.text)
 		.join(" ")
 		.trim();
+}
+
+/** A full stop or a real pause before a word: a strong sign someone started over. */
+function strongBreakBefore(words: readonly RetakeWord[], position: number, fps: number): boolean {
+	if (position === 0) return true;
+	const previous = words[position - 1];
+	return (
+		/[.!?…]["')\]]*$/.test(previous.text.trim()) ||
+		(words[position].startFrame - previous.endFrame) / fps > 0.6
+	);
 }
 
 /**
@@ -100,6 +115,12 @@ export function findRetakes(words: readonly RetakeWord[], options: RetakeOptions
 				length += 1;
 			}
 			if (length < minMatch) continue;
+			// The words of the first attempt the second didn't repeat. After a comma
+			// that has to be none — "we want to win, we want to grow" is rhetoric,
+			// not a retake. After a full stop or a pause, a word or two may change:
+			// people rephrase as they restart.
+			const unrepeated = second - first - length;
+			if (unrepeated > (strongBreakBefore(words, second, options.fps) ? 2 : 0)) continue;
 			// The abandoned attempt is everything from its start to the restart.
 			const last = second - 1;
 			for (let position = first; position <= last; position++) claimed.add(position);
