@@ -117,9 +117,32 @@ describe("running the clips workflow", () => {
 		const clip = report.timeline?.tracks
 			.flatMap((t) => t.clips)
 			.find((c) => c.mediaType === "video");
+		// The canvas itself turns vertical — widening the footage on a 16:9
+		// canvas only ever produced a zoomed landscape.
+		expect(report.timeline?.width).toBe(1080);
+		expect(report.timeline?.height).toBe(1920);
 		// 16:9 into 9:16 needs the footage more than three times the frame width.
 		expect(clip?.transform.width).toBeGreaterThan(3);
 		expect(clip?.transform.height).toBe(1);
+	});
+
+	it("exports the timeline the run built, not the one it started from", async () => {
+		let exported: TimelineModel | null = null;
+		const report = await runWorkflow(
+			clipsWorkflow(),
+			context({
+				hooks: {
+					narrate: async () => ({ spoken: 2, lines: [] }),
+					export: async ({ timeline }) => {
+						exported = timeline;
+						return { path: "/tmp/out.mp4" };
+					},
+				},
+			}),
+		);
+		expect(report.ok).toBe(true);
+		expect(exported).toBe(report.timeline);
+		expect((exported as TimelineModel | null)?.height).toBe(1920);
 	});
 
 	it("puts captions on a CC track", async () => {

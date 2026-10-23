@@ -50,11 +50,20 @@ import {
 } from "./zoom";
 
 export interface ExportSettings {
-	/** Long-edge resolution. "source" keeps the timeline's own size. */
-	resolution: "source" | "1080p" | "720p";
+	/**
+	 * Short-edge resolution, so "1080p" means 1920×1080 landscape and 1080×1920
+	 * vertical alike. "source" keeps the timeline's own size.
+	 */
+	resolution: "source" | "2160p" | "1080p" | "720p";
 	format: "webm";
 	/** 0–1; maps onto the encoder's bitrate. */
 	quality: number;
+	/**
+	 * An exact video bitrate in bits per second, overriding the one `quality`
+	 * implies. Platform presets set it, because what a platform recommends is a
+	 * number, not a fraction of a curve.
+	 */
+	bitrate?: number;
 }
 
 export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
@@ -70,16 +79,19 @@ export function exportDimensions(
 	if (settings.resolution === "source") {
 		return { width: timeline.width, height: timeline.height };
 	}
-	const targetHeight = settings.resolution === "1080p" ? 1080 : 720;
-	const scale = targetHeight / timeline.height;
+	const target = { "2160p": 2160, "1080p": 1080, "720p": 720 }[settings.resolution];
+	// The short edge, not the height: scaling a 1080×1920 timeline to a 1080
+	// height made "1080p" of a vertical video a 608×1080 file.
+	const scale = target / Math.min(timeline.width, timeline.height);
 	// Encoders reject odd dimensions, so round both axes to even numbers.
 	return {
 		width: Math.round((timeline.width * scale) / 2) * 2,
-		height: Math.round(targetHeight / 2) * 2,
+		height: Math.round((timeline.height * scale) / 2) * 2,
 	};
 }
 
-function bitrateFor(width: number, height: number, quality: number): number {
+function bitrateFor(width: number, height: number, quality: number, exact?: number): number {
+	if (exact && exact > 0) return Math.round(exact);
 	// Roughly 0.1 bits per pixel per frame at full quality, which lands in the
 	// range browsers encode well.
 	const pixels = width * height;
@@ -994,7 +1006,7 @@ export function exportTimeline(
 		const chunks: Blob[] = [];
 		const recorder = new MediaRecorder(stream, {
 			mimeType,
-			videoBitsPerSecond: bitrateFor(width, height, settings.quality),
+			videoBitsPerSecond: bitrateFor(width, height, settings.quality, settings.bitrate),
 		});
 		recorder.ondataavailable = (event) => {
 			if (event.data.size > 0) chunks.push(event.data);

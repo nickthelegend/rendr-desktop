@@ -52,7 +52,12 @@ import {
 	SourcePicker,
 } from "./Recording";
 import type { TimelineModel } from "./reducers";
-import { splitAt, trimSelectionToPlayhead, updateZoomRegion } from "./reducers";
+import {
+	totalFrames as computeTotalFrames,
+	splitAt,
+	trimSelectionToPlayhead,
+	updateZoomRegion,
+} from "./reducers";
 import { ExportSheet, ProjectSettingsSheet, PromptSheet, ShortcutsSheet } from "./Sheets";
 import { Split, type SplitPane } from "./Split";
 import { type CaptureSource, type EditorApi, formatTimecode, useEditorState } from "./state";
@@ -231,16 +236,23 @@ export function EditorShell() {
 	const openProjectFile = useCallback(() => projectInput.current?.click(), []);
 
 	const runExport = useCallback(
-		async (settingsOverride?: Partial<ExportSettings>) => {
+		async (settingsOverride?: Partial<ExportSettings>, timelineOverride?: TimelineModel) => {
 			const settings = { ...exportSettings, ...settingsOverride };
-			setExportProgress({ frame: 0, totalFrames: api.totalFrames, ratio: 0 });
+			// A caller that just committed hands over what it committed: this
+			// callback was built by the render before that commit, so its own
+			// `api.timeline` is still the cut as it stood.
+			const timeline = timelineOverride ?? api.timeline;
+			const frames = timelineOverride
+				? computeTotalFrames(timelineOverride)
+				: api.totalFrames;
+			setExportProgress({ frame: 0, totalFrames: frames, ratio: 0 });
 			// Offline when WebCodecs will take it — the encode then runs as fast
 			// as frames can be composited rather than at playback speed. The
 			// real-time path stays as the fallback. The route is decided before
 			// the job is registered because the two write different containers,
 			// and the job is named after the file that will actually appear.
-			const { width, height } = exportDimensions(api.timeline, settings);
-			const offline = await offlineExportSupport(width, height, api.timeline.fps);
+			const { width, height } = exportDimensions(timeline, settings);
+			const offline = await offlineExportSupport(width, height, timeline.fps);
 			const filename = `${state.projectName}.${offline.supported ? "mp4" : "webm"}`;
 
 			// The job is what `manage_exports` lists and cancels. It is registered
@@ -262,17 +274,17 @@ export function EditorShell() {
 			] as const;
 			const handle = offline.supported
 				? exportTimelineOffline(
-						api.timeline,
+						timeline,
 						state.assets,
-						api.totalFrames,
+						frames,
 						settings,
 						onExportProgress,
 						...overlays,
 					)
 				: exportTimeline(
-						api.timeline,
+						timeline,
 						state.assets,
-						api.totalFrames,
+						frames,
 						settings,
 						onExportProgress,
 						...overlays,
@@ -610,12 +622,12 @@ export function EditorShell() {
 		// The encoder renders into its own offscreen canvas, so an agent-started
 		// export is the same render the dialog performs — the dialog only ever
 		// supplied the progress bar.
-		api.registerExporter((settingsOverride) => {
+		api.registerExporter((settingsOverride, timeline) => {
 			if (exportRef.current) throw new Error("An export is already running.");
-			if (api.totalFrames === 0)
+			if ((timeline ? computeTotalFrames(timeline) : api.totalFrames) === 0)
 				throw new Error("There's nothing on the timeline to export.");
 			setExporting(true);
-			return runExport(settingsOverride);
+			return runExport(settingsOverride, timeline);
 		});
 		return () => {
 			api.registerRecorder(null);

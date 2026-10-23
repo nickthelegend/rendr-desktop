@@ -96,7 +96,9 @@ export async function offlineExportSupport(
 	};
 }
 
-function bitrateFor(width: number, height: number, quality: number): number {
+function bitrateFor(width: number, height: number, quality: number, exact?: number): number {
+	// A preset's exact rate wins on both routes, for the same reason.
+	if (exact && exact > 0) return Math.round(exact);
 	// Matches the real-time path's curve, so switching routes doesn't silently
 	// change how big the file comes out.
 	return Math.round(width * height * 30 * 0.1 * (0.4 + quality * 0.6));
@@ -167,7 +169,7 @@ export function exportTimelineOffline(
 				width,
 				height,
 				frameRate: timeline.fps,
-				bitrate: bitrateFor(width, height, settings.quality),
+				bitrate: bitrateFor(width, height, settings.quality, settings.bitrate),
 				codec: support.codec,
 			},
 			Boolean(mixed),
@@ -200,7 +202,7 @@ export function exportTimelineOffline(
 			width,
 			height,
 			framerate: timeline.fps,
-			bitrate: bitrateFor(width, height, settings.quality),
+			bitrate: bitrateFor(width, height, settings.quality, settings.bitrate),
 			// Annex B would need conversion; the muxer wants AVCC.
 			avc: { format: "avc" },
 		});

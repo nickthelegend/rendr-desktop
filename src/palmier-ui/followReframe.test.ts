@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { clipAtFrame } from "./keyframes";
+import { withDefaults } from "./model";
 import { followKeyframes } from "./workflowRun";
 
 const base = {
@@ -32,17 +34,19 @@ describe("following the cursor", () => {
 	});
 
 	it("centres when the cursor is centred", () => {
+		// Rows are the top-left corner, so a centred box sits half its width
+		// left of the middle.
 		const keys = followKeyframes(parked(0.5), base);
-		for (const key of keys) expect(key.values[0]).toBeCloseTo(0.5, 3);
+		for (const key of keys) expect(key.values[0] + base.width / 2).toBeCloseTo(0.5, 3);
 	});
 
 	it("never exposes an edge, however far out the cursor goes", () => {
-		// The crop can only travel (width-1)/2 before the footage runs out.
-		const reach = (base.width - 1) / 2;
+		// The footage's left edge may never come past the frame's, nor its
+		// right edge fall short of the frame's.
 		for (const cx of [0, 1, -0.5, 1.5]) {
 			for (const key of followKeyframes(parked(cx), base)) {
-				expect(key.values[0]).toBeGreaterThanOrEqual(0.5 - reach - 1e-6);
-				expect(key.values[0]).toBeLessThanOrEqual(0.5 + reach + 1e-6);
+				expect(key.values[0]).toBeLessThanOrEqual(1e-6);
+				expect(key.values[0] + base.width).toBeGreaterThanOrEqual(1 - 1e-6);
 			}
 		}
 	});
@@ -63,8 +67,35 @@ describe("following the cursor", () => {
 	});
 
 	it("keeps vertical centred, since the crop only moves sideways", () => {
+		// A full-height box centred vertically has its top at the frame's top.
 		for (const key of followKeyframes(parked(0.2), base)) {
-			expect(key.values[1]).toBe(0.5);
+			expect(key.values[1]).toBe(0);
+		}
+	});
+
+	it("keeps the pointer in shot once the rows are played back", () => {
+		// The rows are only right if the reader that plays them agrees: the
+		// point of the footage under the pointer must land inside the frame.
+		const still = withDefaults({
+			id: "c",
+			name: "Take",
+			mediaType: "video",
+			assetId: "a",
+			startFrame: 0,
+			endFrame: 300,
+		});
+		for (const cx of [0.05, 0.3, 0.5, 0.7, 0.95]) {
+			const [key] = followKeyframes(parked(cx), base);
+			const clip = {
+				...still,
+				transform: { ...still.transform, width: base.width, height: 1 },
+				keyframes: { position: [key] },
+			};
+			const at = clipAtFrame(clip, 0).transform;
+			const pointerOnCanvas = at.centerX - at.width / 2 + cx * at.width;
+			expect(pointerOnCanvas).toBeGreaterThanOrEqual(0);
+			expect(pointerOnCanvas).toBeLessThanOrEqual(1);
+			expect(at.centerY).toBeCloseTo(0.5, 6);
 		}
 	});
 

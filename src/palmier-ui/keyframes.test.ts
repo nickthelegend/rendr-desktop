@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
 	animatedProperties,
+	boxSizeAt,
 	clipAtFrame,
 	clipOpacityAt,
 	fadeMultiplierAt,
 	hasKeyframes,
 	keyframeRows,
 	parseKeyframeRows,
+	positionRow,
 	sampleTrack,
 } from "./keyframes";
 import { withDefaults } from "./model";
@@ -178,6 +180,31 @@ describe("clipAtFrame", () => {
 		const at = clipAtFrame(animated, 100);
 		expect(at.opacity).toBe(0.4);
 		expect(at.transform.rotation).toBe(45);
+	});
+});
+
+describe("positionRow / boxSizeAt", () => {
+	it("writes a row that the reader plays back at the intended centre", () => {
+		// The writers' half of the convention clipAtFrame reads: a row built
+		// from a centre must come back as that centre.
+		const animated = clip({
+			keyframes: {
+				position: [{ frame: 0, values: positionRow(0.7, 0.2, 0.4, 0.3), interp: "hold" }],
+				scale: [{ frame: 0, values: [0.4, 0.3], interp: "hold" }],
+			},
+		});
+		const at = clipAtFrame(animated, 100).transform;
+		expect(at.centerX).toBeCloseTo(0.7, 6);
+		expect(at.centerY).toBeCloseTo(0.2, 6);
+	});
+
+	it("reads the size from the scale track when there is one", () => {
+		const still = clip();
+		expect(boxSizeAt(still, 0)).toEqual([still.transform.width, still.transform.height]);
+		const scaled = clip({
+			keyframes: { scale: [{ frame: 0, values: [0.5, 0.25], interp: "hold" }] },
+		});
+		expect(boxSizeAt(scaled, 40)).toEqual([0.5, 0.25]);
 	});
 });
 
