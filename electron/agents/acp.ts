@@ -8,6 +8,7 @@
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 
+import { TOOLS_BY_NAME } from "../mcp/toolDefinitions";
 import { agentEnv, resolveBinary, splitCommandLine } from "./binaries";
 import { parseJson, probeVersion, readLines } from "./jsonl";
 import {
@@ -144,12 +145,32 @@ class AcpConnection {
 		return this.stderrTail.trim().split("\n").filter(Boolean).pop() ?? "";
 	}
 
-	request<T = Json>(method: string, params: Json): Promise<T> {
+	request<T = Json>(method: string, params: Json, timeoutMs = 0): Promise<T> {
 		if (this.exited) return Promise.reject(new Error("The agent is not running."));
 		const id = ++this.nextId;
 		this.write({ jsonrpc: "2.0", id, method, params });
 		return new Promise<T>((resolve, reject) => {
-			this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
+			const timer =
+				timeoutMs > 0
+					? setTimeout(() => {
+							if (!this.pending.delete(id)) return;
+							reject(
+								new Error(
+									`The agent didn't answer ${method} within ${Math.round(timeoutMs / 1000)}s.`,
+								),
+							);
+						}, timeoutMs)
+					: null;
+			this.pending.set(id, {
+				resolve: (value) => {
+					if (timer) clearTimeout(timer);
+					(resolve as (value: unknown) => void)(value);
+				},
+				reject: (error) => {
+					if (timer) clearTimeout(timer);
+					reject(error);
+				},
+			});
 		});
 	}
 
@@ -158,7 +179,13 @@ class AcpConnection {
 	}
 
 	kill(): void {
+		// Settle everything in flight first: a prompt left pending would keep
+		// the provider "still answering" forever, since the close handler
+		// ignores a process that was already marked as gone.
+		const reason = "The agent was stopped.";
 		this.exited = true;
+		for (const call of this.pending.values()) call.reject(new Error(reason));
+		this.pending.clear();
 		this.child.kill("SIGTERM");
 	}
 
@@ -208,15 +235,29 @@ let connection: AcpConnection | null = null;
 let running: { context: RunContext } | null = null;
 
 /** A permission request is approved only when it is for one of Rendr's own tools. */
+/** Tool kinds ACP agents use for things Rendr never needs: never approved, whatever the title says. */
+const REFUSED_KINDS = new Set(["execute", "edit", "delete", "move", "fetch"]);
+
+/**
+ * A permission request is approved only for one of Rendr's own tools.
+ *
+ * The title is written by the agent and, through it, by the model — so it is
+ * matched whole, against Rendr's real tool names, in the exact shapes agents
+ * use for MCP tools ("rendr_add_clips", "mcp__rendr__add_clips",
+ * "add_clips (rendr MCP Server)"). A prefix or suffix match would wave through
+ * "curl … | sh (rendr)". A tool whose kind is a shell, an edit or a fetch is
+ * refused outright, title or not.
+ */
 export function isRendrToolCall(toolCall: unknown): boolean {
 	if (!toolCall || typeof toolCall !== "object") return false;
 	const record = toolCall as Json;
-	// Only the tool's name counts. Its input is the model's to write, so a shell
-	// command that merely mentions "rendr" must not be waved through.
-	const title = String(record.title ?? "");
-	return (
-		/^(mcp__)?rendr(__|[_./:])\w+/i.test(title) || /\(rendr( MCP Server)?\)\s*$/i.test(title)
-	);
+	if (typeof record.kind === "string" && REFUSED_KINDS.has(record.kind)) return false;
+	const title = String(record.title ?? "").trim();
+	const named =
+		title.match(/^(?:mcp__rendr__|rendr(?:__|[_./:]))([a-z][a-z0-9_]*)$/i)?.[1] ??
+		title.match(/^([a-z][a-z0-9_]*) \(rendr(?: MCP Server)?\)$/i)?.[1] ??
+		null;
+	return named !== null && TOOLS_BY_NAME.has(named.toLowerCase());
 }
 
 export function choosePermission(params: Json): Json {
@@ -291,11 +332,21 @@ async function connect(context: RunContext): Promise<AcpConnection> {
 		if (running) running.context.emit({ kind: "error", message: reason });
 	};
 
-	const init = await next.request<Json>("initialize", {
-		protocolVersion: 1,
-		clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-		clientInfo: { name: "rendr", title: "Rendr", version: "0.1.0" },
-	});
+	// The handshake gets a deadline (generous: an npx adapter may download on
+	// first run); a prompt doesn't, since a long edit is legitimately long.
+	const HANDSHAKE_MS = 180_000;
+	const init = await next.request<Json>(
+		"initialize",
+		{
+			protocolVersion: 1,
+			clientCapabilities: {
+				fs: { readTextFile: false, writeTextFile: false },
+				terminal: false,
+			},
+			clientInfo: { name: "rendr", title: "Rendr", version: "0.1.0" },
+		},
+		HANDSHAKE_MS,
+	);
 	next.agentCapabilities = (init.agentCapabilities ?? {}) as Json;
 	const mcpCapabilities = (next.agentCapabilities.mcpCapabilities ?? {}) as Json;
 	// HTTP when the agent can take it; otherwise the stdio bridge to the same server.
@@ -311,10 +362,14 @@ async function connect(context: RunContext): Promise<AcpConnection> {
 				})),
 			};
 
-	const session = await next.request<Json>("session/new", {
-		cwd: context.workDir,
-		mcpServers: [rendrServer],
-	});
+	const session = await next.request<Json>(
+		"session/new",
+		{
+			cwd: context.workDir,
+			mcpServers: [rendrServer],
+		},
+		HANDSHAKE_MS,
+	);
 	if (typeof session.sessionId !== "string") throw new Error("The agent did not open a session.");
 	next.sessionId = session.sessionId;
 	if (model) await applyModel(next, session, model);
