@@ -322,7 +322,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 	{
 		name: "export_project",
 		description:
-			"Queues an export from the current project using the same modes as the Export dialog. mode defaults to video. video renders H.264, H.265, or ProRes; xml writes XMEML timeline XML; fcpxml writes FCPXML; rendr writes a self-contained .rendr project package. For timeline interchange, pick the format by the target editor: Premiere Pro -> xml; DaVinci Resolve or Final Cut Pro -> fcpxml (fcpxml also carries text, transforms, crop, opacity, and keyframes that xml cannot). Video exports render zoom regions, edge softness, and edge rounding; Rendr project exports preserve them; xml/fcpxml interchange omits them. Omit outputPath to write a unique file to ~/Downloads. Existing direct outputPath files are overwritten by default to match the UI save flow; pass overwrite=false to refuse. Every mode returns status=started or status=queued with a jobId and destination path. Use manage_exports to check progress, warnings/results, or cancel by jobId.",
+			"Queues an export from the current project using the same modes as the Export dialog. mode defaults to video. video renders H.264, H.265, or ProRes; xml writes XMEML timeline XML; fcpxml writes FCPXML; rendr writes a self-contained .rendr project package. For a platform upload, pass preset (youtube, shorts, reels, tiktok, square) instead of picking a resolution; vertical presets need a 9:16 timeline, which reframe_timeline produces. For timeline interchange, pick the format by the target editor: Premiere Pro -> xml; DaVinci Resolve or Final Cut Pro -> fcpxml (fcpxml also carries text, transforms, crop, opacity, and keyframes that xml cannot). Video exports render zoom regions, edge softness, and edge rounding; Rendr project exports preserve them; xml/fcpxml interchange omits them. Omit outputPath to write a unique file to ~/Downloads. Existing direct outputPath files are overwritten by default to match the UI save flow; pass overwrite=false to refuse. Every mode returns status=started or status=queued with a jobId and destination path. Use manage_exports to check progress, warnings/results, or cancel by jobId.",
 		inputSchema: object({
 			mode: {
 				type: "string",
@@ -338,7 +338,14 @@ export const EDITING_TOOLS: AgentTool[] = [
 			resolution: {
 				type: "string",
 				enum: ["720p", "1080p", "2K", "4K", "Match Timeline"],
-				description: "Video mode only. Optional. Default Match Timeline.",
+				description:
+					"Video mode only. Optional. Default Match Timeline. Presets name the SHORT edge, so 1080p is 1920×1080 for a landscape timeline and 1080×1920 for a vertical one. 4K (2160 short edge) only when the timeline is at least that large; 2K is not offered. Mutually exclusive with preset.",
+			},
+			preset: {
+				type: "string",
+				enum: ["youtube", "shorts", "reels", "tiktok", "square"],
+				description:
+					"Video mode only. Optional. Sets resolution and bitrate for a platform: youtube = 16:9 at 1080p (4K when the timeline is 2160 or larger), 8 Mbps (12 above 30 fps; 40/60 at 4K); shorts, reels, tiktok = 9:16 at 1080×1920, 8 Mbps (12 above 30 fps); square = 1:1 at 1080×1080, 6 Mbps (9 above 30 fps). Refuses with error 'aspect_mismatch' — naming reframe_timeline and the aspect to pass it in `fix` — when the timeline isn't already that shape, rather than encoding a file the platform would letterbox. Mutually exclusive with resolution.",
 			},
 			outputPath: {
 				type: "string",
@@ -632,7 +639,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 	{
 		name: "add_clips",
 		description:
-			"Places one or more media assets on the timeline as a single undoable action. Each entry's asset type must be compatible with its target track (video/image are interchangeable across video/image tracks; audio requires an audio track). When a video asset with audio is placed on a video track, a linked audio clip is automatically created on an audio track (an existing one if available, otherwise a new one). The whole batch is one undo step.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates the needed tracks — one shared video track for visual entries (above existing visuals) and one shared audio track for audio entries (appended below existing audio, so linked dialogue on A1 stays put and music/VO land on A2+). To target existing tracks, set trackIndex on every entry. Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior.\n\nNESTING: mediaRef may also be a timelineId — the timeline is placed as a single live nested clip (mediaType 'sequence'), with a linked audio clip when the child has audio. Duration defaults to the child's full length; source and endFrame work as for video. Cycles (a timeline containing itself) and empty timelines are rejected.",
+			"Places one or more media assets on the timeline as a single undoable action. Each entry's asset type must be compatible with its target track (video/image are interchangeable across video/image tracks; audio requires an audio track). When a video asset with audio is placed on a video track, a linked audio clip is automatically created on an audio track (an existing one if available, otherwise a new one). The whole batch is one undo step.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates the needed tracks — one shared video track for visual entries (above existing visuals) and one shared audio track for audio entries (appended below existing audio, so linked dialogue on A1 stays put and music/VO land on A2+). To target existing tracks, set trackIndex on every entry. Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior. Visual entries go on the main footage track and never on a caption (CC) or title (T1) track, so placing footage cannot clear captions.\n\nThe first video placed on an empty project that is still at the default 1920×1080 @ 30 fps sets the project's resolution and frame rate from that footage (sizes rounded to even, held to a 2160 short edge; rates snapped to 24/25/30/50/60 etc.), so vertical phone footage makes a vertical project instead of being centre-cropped to 16:9. A project whose settings were changed, or that already has clips, keeps its own.\n\nNESTING: mediaRef may also be a timelineId — the timeline is placed as a single live nested clip (mediaType 'sequence'), with a linked audio clip when the child has audio. Duration defaults to the child's full length; source and endFrame work as for video. Cycles (a timeline containing itself) and empty timelines are rejected.",
 		inputSchema: object(
 			{
 				entries: {
@@ -2119,7 +2126,7 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
 		name: "reframe_timeline",
 		description:
-			"Recomposes every visual clip for another aspect — 9:16 for vertical, 1:1 or 4:5 for square-ish feeds, 16:9 to go back. The project keeps its pixel size; what changes is the box the footage occupies, centred and cover-fitted, so a 16:9 screen recording reframed to 9:16 shows the middle of the screen at full height rather than a letterboxed miniature.\n\nThis is the one call that turns a landscape recording into something postable vertically. Text and captions are left alone, since they are already composed for the frame rather than cropped from a source. Undoable as one step.",
+			"Turns the ACTIVE timeline into another aspect — 9:16 for Shorts/Reels/TikTok, 1:1 or 4:5 for square-ish feeds, 16:9 to go back. The canvas itself changes: the new aspect is taken at the project's short edge, so a 1920×1080 project becomes 1080×1920 for 9:16 (3840×2160 becomes 2160×3840). Footage that filled the old frame is cover-fitted to the new one, centre-cropped by default, so a landscape talking head reframed to 9:16 keeps the middle of the shot at full height rather than being letterboxed. Insets keep their pixel size and stay inside the frame; existing position/scale keyframes are carried over relative to the picture.\n\nThis modifies the active timeline in place and is undoable as one step (undo restores the old canvas and framing). To keep the landscape cut alongside the vertical one, use batch_export instead, which builds each aspect as its own timeline with the same framing. Text and captions are left alone, since they are already composed for the frame rather than cropped from a source. The receipt reports the new resolution.",
 		inputSchema: object(
 			{
 				aspect: {
@@ -2130,7 +2137,7 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 				followCursor: {
 					type: "boolean",
 					description:
-						"Default true when the recording carries cursor telemetry. Pans the crop to keep the pointer in shot instead of holding the centre — a centred vertical crop of a screen recording often misses the sidebar or corner where the work is happening. The motion is smoothed, so it follows the subject rather than mirroring every flick, and clamped so no edge is ever exposed. Pass false to hold the centre.",
+						"Default true when the recording carries cursor telemetry (camera footage has none, so it is centre-cropped). Pans the crop to keep the pointer in shot instead of holding the centre — a centred vertical crop of a screen recording often misses the sidebar or corner where the work is happening. The motion is smoothed, so it follows the subject rather than mirroring every flick, and clamped so no edge is ever exposed. Pass false to hold the centre.",
 				},
 			},
 			["aspect"],
@@ -2245,7 +2252,7 @@ export const WORKFLOW_RUN_TOOLS: AgentTool[] = [
 	{
 		name: "run_workflow",
 		description:
-			"Runs a workflow against the current timeline. Each node is a step that takes a timeline and returns one, so a run is a fold over the graph's order.\n\nAll or nothing: nothing is committed until every step has succeeded, so a failure at step five leaves the timeline exactly as it was rather than half-edited. A step that cannot do its work stops the run and says why, rather than passing the timeline through unchanged — a node that silently no-ops would make a run report success having produced nothing.\n\nThe response lists what each step actually did, and the output path when an Export ran. Undoable as one step. Check manage_workflows describe first if you want to know what would stop it before spending the time.",
+			"Runs a workflow against the current timeline. Each node is a step that takes a timeline and returns one, so a run is a fold over the graph's order.\n\nAll or nothing: nothing is committed until every step has succeeded, so a failure at step five leaves the timeline exactly as it was rather than half-edited. A step that cannot do its work stops the run and says why, rather than passing the timeline through unchanged — a node that silently no-ops would make a run report success having produced nothing.\n\nThe response lists what each step actually did. An Export step is started only after the run has been committed, and renders the timeline the run produced; its jobId comes back as exportJobId (poll manage_exports), or exportError if the encode could not start — the edit itself still stands. Undoable as one step. Check manage_workflows describe first if you want to know what would stop it before spending the time.",
 		inputSchema: object(
 			{
 				workflowId: { type: "string", description: "Which workflow to run." },
@@ -2778,7 +2785,7 @@ export const MOTION_TOOLS: AgentTool[] = [
 	{
 		name: "add_ken_burns",
 		description:
-			"Add a slow push, pull, or drift across a clip — the move that keeps a still image or a static screen recording from looking frozen. Writes scale and position keyframes across the clip's full length, so it animates in the preview and the export identically. direction sets where it goes: 'in' pushes toward the centre or toward focusX/focusY, 'out' pulls back, and the compass directions pan without zooming. Existing position and scale keyframes on the clip are replaced, because two competing moves on one clip is not a move anyone asked for.",
+			"Add a slow push, pull, or drift across a clip — the move that keeps a still image or a static screen recording from looking frozen. Writes scale and position keyframes across the clip's full length, so it animates in the preview and the export identically. direction sets where it goes: 'in' pushes in on focusX/focusY (default the centre), 'out' pulls back from it, and the compass directions pan without zooming. Sizes are relative to the clip's own box, so a full-frame clip never shows its edge and an inset stays an inset; the keyframes follow set_keyframes' convention (position rows are the top-left corner, scale rows are absolute width/height). Existing position and scale keyframes on the clip are replaced, because two competing moves on one clip is not a move anyone asked for.",
 		inputSchema: object(
 			{
 				clipIds: {
@@ -2799,9 +2806,9 @@ export const MOTION_TOOLS: AgentTool[] = [
 				focusX: {
 					type: "number",
 					description:
-						"Where a push ends up, 0–1 across the frame. Default 0.5. Ignored by the compass directions.",
+						"The point a push zooms toward, 0–1 across the clip's picture: that point holds still while everything around it grows, so the move closes in on it. Default 0.5. Ignored by the compass directions.",
 				},
-				focusY: { type: "number", description: "Same, down the frame. Default 0.5." },
+				focusY: { type: "number", description: "Same, down the picture. Default 0.5." },
 			},
 			["clipIds"],
 		),
@@ -2832,7 +2839,7 @@ export const MOTION_TOOLS: AgentTool[] = [
 	{
 		name: "add_motion_preset",
 		description:
-			"Animate a clip on or off screen — the entrance and exit moves a title needs. 'slide' travels in from an edge, 'pop' scales up from small, 'fade' ramps opacity, 'drift' is a slow continuous move with no settle. Writes keyframes over the first or last durationFrames of the clip and leaves the middle alone, so a title can have an entrance and an exit from two calls. For fades alone, set_clip_properties fadeInFrames is simpler; this is for movement.",
+			"Animate a clip on or off screen — the entrance and exit moves a title needs. 'slide' travels in from an edge, 'pop' scales up from small, 'fade' ramps opacity, 'drift' is a slow continuous move with no settle. Writes keyframes over the first or last durationFrames of the clip and leaves the middle alone, so a title can have an entrance and an exit from two calls. Moves come to rest exactly where the clip is placed, and 'pop' grows to the clip's own size rather than the frame's. For fades alone, set_clip_properties fadeInFrames is simpler; this is for movement.",
 		inputSchema: object(
 			{
 				clipIds: {
@@ -3209,7 +3216,7 @@ export const FINISH_TOOLS: AgentTool[] = [
 	{
 		name: "batch_export",
 		description:
-			"Build several delivery variants of the same cut in one call — the actual short-form case, where one edit becomes a 9:16 vertical, a 1:1 square, and a 16:9 landscape. Each variant may set its own aspect and its own maximum length.\n\nEach variant becomes its own timeline, sized to that aspect, with every picture clip scaled to cover the new frame rather than letterboxed into it, and cut to length if maxSeconds is set. It does not write files: export_project with the returned timelineId writes each one, and set_active_timeline opens one to check before committing an encode to it.\n\nEvery variant is derived from this cut as it is now, never from the previous variant. That is the whole reason to use this rather than reframing in a loop: running reframe and trim in sequence without restoring compounds them, so the third variant would be reframed three times and cut to a third of the length. A length limit is a hard cut, not a retime, because retiming would change how the narration sounds.",
+			"Build several delivery variants of the same cut in one call — the actual short-form case, where one edit becomes a 9:16 vertical, a 1:1 square, and a 16:9 landscape. Each variant may set its own aspect and its own maximum length.\n\nEach variant becomes its own timeline, sized to that aspect at the cut's short edge and framed exactly as reframe_timeline would frame it — footage that filled the frame is centred and scaled to cover the new one rather than letterboxed into it, insets keep their size — and cut to length if maxSeconds is set. It does not write files: export_project with the returned timelineId writes each one, and set_active_timeline opens one to check before committing an encode to it.\n\nEvery variant is derived from this cut as it is now, never from the previous variant. That is the whole reason to use this rather than reframing in a loop: running reframe and trim in sequence without restoring compounds them, so the third variant would be reframed three times and cut to a third of the length. A length limit is a hard cut, not a retime, because retiming would change how the narration sounds.",
 		inputSchema: object(
 			{
 				variants: {

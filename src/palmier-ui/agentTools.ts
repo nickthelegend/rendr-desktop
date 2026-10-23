@@ -46,6 +46,7 @@ import { CURSOR_LIMITS, CURSOR_STYLES, type CursorSettings, DEFAULT_CURSOR } fro
 import { type ColorBalance, parseCurve, type ToneCurves } from "./curves";
 import { type AppliedEffect, EFFECTS, effectCatalog, normalizeEffect } from "./effects";
 import { DEFAULT_EXPORT_SETTINGS, type ExportSettings, exportDimensions } from "./export";
+import { resolveExportPreset } from "./exportPresets";
 import {
 	canvasToBase64Png,
 	canvasToPngBlob,
@@ -56,10 +57,12 @@ import {
 import { toFcpxml, toXmeml } from "./interchange";
 import {
 	animatedProperties,
+	boxSizeAt,
 	isKeyframeProperty,
 	KEYFRAME_ARITY,
 	keyframeRows,
 	parseKeyframeRows,
+	positionRow,
 } from "./keyframes";
 import {
 	ANCHORS,
@@ -172,7 +175,7 @@ import {
 	type WorkflowModel,
 	workflowIssues,
 } from "./workflow";
-import { ASPECTS, followKeyframes, reframeClips, runWorkflow } from "./workflowRun";
+import { ASPECTS, followKeyframes, reframeTimeline, runWorkflow } from "./workflowRun";
 import { cursorFocusAt, DEFAULT_ZOOM_TIMING, scaleForDepth, ZOOM_TIMING_LIMITS } from "./zoom";
 
 export interface ToolResult {
@@ -189,9 +192,12 @@ function ok(payload: unknown): ToolResult {
 	return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
-function fail(code: string, message: string): ToolResult {
+/** `detail` carries machine-readable context, such as the call that would fix it. */
+function fail(code: string, message: string, detail?: Record<string, unknown>): ToolResult {
 	return {
-		content: [{ type: "text", text: JSON.stringify({ error: code, message }, null, 2) }],
+		content: [
+			{ type: "text", text: JSON.stringify({ error: code, message, ...detail }, null, 2) },
+		],
 		isError: true,
 	};
 }
@@ -1422,6 +1428,12 @@ export function createAgentTools(api: EditorApi) {
 			if (!["video", "xml", "fcpxml", "rendr"].includes(mode)) {
 				return fail("invalid_argument", "mode must be video, xml, fcpxml, or rendr.");
 			}
+			if (args.preset !== undefined && mode !== "video") {
+				return fail(
+					"invalid_argument",
+					"preset sets an encode, so it only applies to video mode.",
+				);
+			}
 
 			// A timelineId picks which cut to write; rendr mode packages them all.
 			const timelineId = asString(args.timelineId);
@@ -1472,35 +1484,55 @@ export function createAgentTools(api: EditorApi) {
 					);
 				}
 				const resolution = asString(args.resolution);
+				const presetName = asString(args.preset);
+				if (resolution && presetName) {
+					return fail(
+						"invalid_argument",
+						"Pass preset or resolution, not both — a preset picks the resolution for its platform.",
+					);
+				}
+				const shortEdge = Math.min(timeline.width, timeline.height);
 				const RESOLUTIONS: Record<string, ExportSettings["resolution"]> = {
 					"Match Timeline": "source",
 					"1080p": "1080p",
 					"720p": "720p",
+					// 4K only from a timeline that has the pixels; scaling 1080
+					// up to 2160 makes a bigger file of the same picture.
+					...(shortEdge >= 2160 ? { "4K": "2160p" as const } : {}),
 				};
 				if (resolution && !RESOLUTIONS[resolution]) {
 					return fail(
 						"unsupported_resolution",
-						`Rendr renders at the timeline's own size, 1080p, or 720p. ${resolution} would be an upscale of pixels that aren't there.`,
+						`Rendr renders at the timeline's own size, 1080p, or 720p${shortEdge >= 2160 ? ", or 4K" : ""}. ${resolution} would be an upscale of pixels that aren't there.`,
 					);
+				}
+
+				let override: Partial<ExportSettings> = resolution
+					? { resolution: RESOLUTIONS[resolution] }
+					: {};
+				let platform: Record<string, unknown> | null = null;
+				if (presetName) {
+					const preset = resolveExportPreset(presetName, timeline);
+					if (!preset.ok) return fail(preset.code, preset.message, preset.detail);
+					override = preset.settings;
+					platform = preset.receipt;
 				}
 
 				try {
 					// Which encoder will take it decides both the container and
 					// how long this runs, so it is reported rather than guessed.
-					const { width, height } = exportDimensions(
-						timeline,
-						resolution
-							? { ...DEFAULT_EXPORT_SETTINGS, resolution: RESOLUTIONS[resolution] }
-							: DEFAULT_EXPORT_SETTINGS,
-					);
+					const { width, height } = exportDimensions(timeline, {
+						...DEFAULT_EXPORT_SETTINGS,
+						...override,
+					});
 					const offline = await offlineExportSupport(width, height, timeline.fps);
-					const jobId = await api.agentExport(
-						resolution ? { resolution: RESOLUTIONS[resolution] } : {},
-					);
+					const jobId = await api.agentExport(override);
 					return ok({
 						status: "started",
 						mode,
 						jobId,
+						resolution: [width, height],
+						...(platform ? { preset: platform } : {}),
 						destination: `${state.projectName}.${offline.supported ? "mp4" : "webm"}`,
 						format: offline.supported ? "MP4 (H.264/AAC)" : "WebM (VP9)",
 						encoder: offline.supported ? "webcodecs-offline" : "mediarecorder-realtime",
@@ -2515,22 +2547,30 @@ export function createAgentTools(api: EditorApi) {
 			// it is on whenever there is telemetry to follow.
 			const follow = args.followCursor !== false && state.cursorTelemetry.length > 0;
 
+			// The active timeline is reframed in place, canvas and all, as one
+			// undoable step. A variant would leave every later edit — captions,
+			// a title, an export — landing on the landscape cut by default;
+			// batch_export is the tool for keeping both.
+			const previous = [timeline.width, timeline.height];
 			return mutate(
-				"Reframe",
+				`Reframe to ${name}`,
 				(t) => {
-					const reframed = reframeClips(t, aspect);
+					const reframed = reframeTimeline(t, aspect, state.assets);
 					if (!follow) return reframed;
 					return reframed.tracks
 						.filter((track) => track.kind === "video")
 						.flatMap((track) => track.clips)
-						.filter((clip) => clip.mediaType !== "text")
+						.filter((clip) => clip.mediaType !== "text" && clip.mediaType !== "audio")
 						.reduce((acc, clip) => {
+							// Only footage wider than the frame has anywhere to pan;
+							// followKeyframes returns nothing for the rest.
 							const keys = followKeyframes(state.cursorTelemetry, {
 								clipStartFrame: clip.startFrame,
 								clipEndFrame: clip.endFrame,
 								trimStartFrame: clip.trimStartFrame,
 								fps: t.fps,
 								width: clip.transform.width,
+								height: clip.transform.height,
 							});
 							return keys.length === 0
 								? acc
@@ -2539,19 +2579,23 @@ export function createAgentTools(api: EditorApi) {
 				},
 				(next) => ({
 					aspect: name,
+					resolution: [next.width, next.height],
+					previous,
 					followingCursor: follow,
 					clips: next.tracks
 						.filter((track) => track.kind === "video")
 						.flatMap((track) => track.clips)
-						.filter((clip) => clip.mediaType !== "text")
+						.filter((clip) => clip.mediaType !== "text" && clip.mediaType !== "audio")
 						.map((clip) => ({
 							id: clip.id,
 							width: Number(clip.transform.width.toFixed(3)),
-							height: clip.transform.height,
+							height: Number(clip.transform.height.toFixed(3)),
 						})),
-					note: follow
-						? "The frame keeps its pixel size and the crop pans to keep the pointer in shot, smoothed so it follows the subject rather than mirroring the mouse. Text and captions were left alone — they are composed for the frame, not cropped from a source."
-						: "The frame keeps its pixel size; the footage is centred and cover-fitted, so nothing is letterboxed. Text and captions were left alone.",
+					note: `The canvas is now ${next.width}×${next.height}. ${
+						follow
+							? "The footage covers it and pans to keep the pointer in shot, smoothed so it follows the subject rather than mirroring the mouse."
+							: "The footage covers it, centre-cropped, so nothing is letterboxed."
+					} Insets kept their size and stay in frame; text and captions were left alone — they are composed for the frame, not cropped from a source. undo restores the ${previous[0]}×${previous[1]} cut.`,
 				}),
 			);
 		},
@@ -2787,6 +2831,13 @@ export function createAgentTools(api: EditorApi) {
 			}
 
 			const dryRun = args.dryRun === true;
+			// The export step only books the encode. Running it inside the
+			// workflow wrote the file before anything was committed, from an
+			// exporter whose idea of the timeline is the cut before this run —
+			// so the reframe, the cuts and the subtitles were all missing from
+			// the file. It is started once the run is committed, with the
+			// timeline the export step actually saw.
+			const booked: { timeline?: TimelineModel } = {};
 			const report = await runWorkflow(workflow, {
 				timeline,
 				assets: state.assets,
@@ -2803,9 +2854,9 @@ export function createAgentTools(api: EditorApi) {
 							},
 					export: dryRun
 						? async () => ({ path: "(dry run — no file written)" })
-						: async () => {
-								const jobId = await api.agentExport({});
-								return { path: `export job ${jobId}` };
+						: async ({ timeline: built }) => {
+								booked.timeline = built;
+								return { path: "export starts once the run is committed" };
 							},
 				},
 			});
@@ -2825,16 +2876,39 @@ export function createAgentTools(api: EditorApi) {
 
 			// Committed once, at the end: a failure part way through must leave
 			// the timeline exactly as it was.
-			return mutate(
+			const receipt = {
+				ran: workflow.name,
+				steps,
+				note: "Every step succeeded, so the timeline was committed as one undoable change.",
+			};
+			const committed = mutate(
 				`Run ${workflow.name}`,
 				() => report.timeline ?? timeline,
-				() => ({
-					ran: workflow.name,
-					steps,
-					...(report.outputPath ? { output: report.outputPath } : {}),
-					note: "Every step succeeded, so the timeline was committed as one undoable change.",
-				}),
+				() => receipt,
 			);
+			const toExport = booked.timeline;
+			if (!toExport) return committed;
+
+			try {
+				// Handed the timeline explicitly: the exporter was registered by
+				// the render before this commit and would otherwise read the
+				// old cut.
+				const jobId = await api.agentExport({}, toExport);
+				return ok({
+					...receipt,
+					exportJobId: jobId,
+					note: `${receipt.note} The export was started after the commit, from the committed timeline; poll manage_exports with the jobId.`,
+				});
+			} catch (error) {
+				// The edit stands — it succeeded and is one undo away — but the
+				// file does not exist, and saying otherwise is the worst outcome.
+				return ok({
+					...receipt,
+					exportError:
+						error instanceof Error ? error.message : "The export couldn't be started.",
+					note: `${receipt.note} The export did not start; call export_project to retry.`,
+				});
+			}
 		},
 
 		manage_workflows(args) {
@@ -5896,38 +5970,61 @@ export function createAgentTools(api: EditorApi) {
 			const pan = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }[direction] ?? [
 				0, 0,
 			];
-			// Normalized canvas units: 0.5 is the centre, so a full-frame travel
-			// is 1.0 and `amount` reads as a fraction of the frame.
-			const startX = zooming ? 0.5 : 0.5 - (pan[0] * amount) / 2;
-			const startY = zooming ? 0.5 : 0.5 - (pan[1] * amount) / 2;
-			const endX = zooming ? 0.5 + (focusX - 0.5) * amount : 0.5 + (pan[0] * amount) / 2;
-			const endY = zooming ? 0.5 + (focusY - 0.5) * amount : 0.5 + (pan[1] * amount) / 2;
 
 			return mutate(
 				"Ken Burns",
 				(t) =>
 					mapClips(t, clipIds, (clip) => {
 						const last = Math.max(1, clip.endFrame - clip.startFrame - 1);
+						// Everything is measured against the clip's own box, not the
+						// canvas: scale rows are absolute sizes, so writing a bare
+						// factor would blow an inset up to fill the frame, and a
+						// push sized to the canvas would travel too far on a small
+						// clip and expose its edge.
+						const { centerX, centerY, width, height } = clip.transform;
+						const row = (scale: number, cx: number, cy: number) => ({
+							size: [width * scale, height * scale],
+							position: positionRow(cx, cy, width * scale, height * scale),
+						});
+						let from: ReturnType<typeof row>;
+						let to: ReturnType<typeof row>;
+						if (zooming) {
+							// The focus point is the one spot of the picture that
+							// holds still while the rest grows away from it. Growing
+							// a box that covers the frame about a point inside it
+							// can only cover more, so no edge is ever exposed.
+							const anchorX = centerX - width / 2 + focusX * width;
+							const anchorY = centerY - height / 2 + focusY * height;
+							const about = (scale: number) =>
+								row(
+									scale,
+									anchorX + (0.5 - focusX) * width * scale,
+									anchorY + (0.5 - focusY) * height * scale,
+								);
+							from = about(startScale);
+							to = about(endScale);
+						} else {
+							// Oversized by `headroom` for the whole move and kept
+							// within that margin, so the picture's own edge never
+							// slides into frame mid-travel.
+							const travelX = (pan[0] * amount * width) / 2;
+							const travelY = (pan[1] * amount * height) / 2;
+							from = row(headroom, centerX - travelX, centerY - travelY);
+							to = row(headroom, centerX + travelX, centerY + travelY);
+						}
 						return {
 							...clip,
-							// Scale is oversized for the whole move, so the clip
-							// never shows its own edge mid-travel.
-							transform: { ...clip.transform },
 							keyframes: {
 								...clip.keyframes,
 								// Replaced, not merged: two competing moves on one
 								// clip is not a move anybody asked for.
 								scale: [
-									{
-										frame: 0,
-										values: [startScale, startScale],
-										interp: "smooth",
-									},
-									{ frame: last, values: [endScale, endScale], interp: "smooth" },
+									{ frame: 0, values: from.size, interp: "smooth" },
+									{ frame: last, values: to.size, interp: "smooth" },
 								],
 								position: [
-									{ frame: 0, values: [startX, startY], interp: "smooth" },
-									{ frame: last, values: [endX, endY], interp: "smooth" },
+									{ frame: 0, values: from.position, interp: "smooth" },
+									{ frame: last, values: to.position, interp: "smooth" },
 								],
 							},
 						};
@@ -5936,7 +6033,7 @@ export function createAgentTools(api: EditorApi) {
 					animated: clipIds.length,
 					direction,
 					amount,
-					note: `Scale runs ${startScale.toFixed(2)}→${endScale.toFixed(2)} with a smooth ease. Any position or scale keyframes these clips had were replaced.`,
+					note: `The picture runs ${startScale.toFixed(2)}×→${endScale.toFixed(2)}× its own size with a smooth ease, so an inset stays an inset. Any position or scale keyframes these clips had were replaced.`,
 				}),
 			);
 		},
@@ -6029,12 +6126,16 @@ export function createAgentTools(api: EditorApi) {
 						const endAt = at === "in" ? move : Math.max(1, span - 1);
 						const restX = clip.transform.centerX;
 						const restY = clip.transform.centerY;
-						const offX = restX + offset[0];
-						const offY = restY + offset[1];
 						const next = { ...clip, keyframes: { ...clip.keyframes } };
 
 						if (preset === "slide" || preset === "drift") {
 							const travel = preset === "drift" ? 0.12 : 1;
+							// Moves are planned in centres and written as the top-left
+							// corner rows carry, against the size the clip has at that
+							// frame — otherwise the clip comes to rest offset by half
+							// its own width instead of where it was placed.
+							const rowAt = (frame: number, cx: number, cy: number) =>
+								positionRow(cx, cy, ...boxSizeAt(clip, frame));
 							const awayX = restX + offset[0] * travel;
 							const awayY = restY + offset[1] * travel;
 							next.keyframes.position =
@@ -6042,24 +6143,24 @@ export function createAgentTools(api: EditorApi) {
 									? [
 											{
 												frame: startAt,
-												values: [awayX, awayY],
+												values: rowAt(startAt, awayX, awayY),
 												interp: "smooth",
 											},
 											{
 												frame: endAt,
-												values: [restX, restY],
+												values: rowAt(endAt, restX, restY),
 												interp: "smooth",
 											},
 										]
 									: [
 											{
 												frame: startAt,
-												values: [restX, restY],
+												values: rowAt(startAt, restX, restY),
 												interp: "smooth",
 											},
 											{
 												frame: endAt,
-												values: [awayX, awayY],
+												values: rowAt(endAt, awayX, awayY),
 												interp: "smooth",
 											},
 										];
@@ -6084,19 +6185,21 @@ export function createAgentTools(api: EditorApi) {
 											];
 							}
 						} else if (preset === "pop") {
+							// Scale rows are absolute sizes, so "full" is the clip's
+							// own box. Writing a bare 1 would land a lower third at
+							// the size of the whole frame.
+							const { width, height } = clip.transform;
+							const small = [width * 0.6, height * 0.6];
+							const full = [width, height];
 							next.keyframes.scale =
 								at === "in"
 									? [
-											{
-												frame: startAt,
-												values: [0.6, 0.6],
-												interp: "smooth",
-											},
-											{ frame: endAt, values: [1, 1], interp: "smooth" },
+											{ frame: startAt, values: small, interp: "smooth" },
+											{ frame: endAt, values: full, interp: "smooth" },
 										]
 									: [
-											{ frame: startAt, values: [1, 1], interp: "smooth" },
-											{ frame: endAt, values: [0.6, 0.6], interp: "smooth" },
+											{ frame: startAt, values: full, interp: "smooth" },
+											{ frame: endAt, values: small, interp: "smooth" },
 										];
 							next.keyframes.opacity =
 								at === "in"
@@ -6136,9 +6239,6 @@ export function createAgentTools(api: EditorApi) {
 											{ frame: endAt, values: [0], interp: "linear" },
 										];
 						}
-						// unused when the offsets are zero, but kept honest
-						void offX;
-						void offY;
 						return next;
 					}),
 				() => ({
@@ -7078,7 +7178,6 @@ export function createAgentTools(api: EditorApi) {
 			// the reframes and the trims, so the third variant would be reframed
 			// three times and cut to a third of the length.
 			const snapshot = timeline;
-			const even = (value: number) => Math.max(16, Math.round(value / 2) * 2);
 			const built: Array<Record<string, unknown>> = [];
 
 			for (const plan of plans) {
@@ -7090,17 +7189,11 @@ export function createAgentTools(api: EditorApi) {
 					return fail("failed", `Couldn't create the '${plan.name}' variant timeline.`);
 
 				const [w, h] = aspects[plan.aspect];
-				const shortEdge = Math.min(snapshot.width, snapshot.height);
-				const width = even(w >= h ? (shortEdge * w) / h : shortEdge);
-				const height = even(w >= h ? shortEdge : (shortEdge * h) / w);
-				const canvasAspect = width / height;
 				const cutAt =
 					plan.maxSeconds === null ? null : Math.round(plan.maxSeconds * snapshot.fps);
 
-				const variant: TimelineModel = {
+				const trimmed: TimelineModel = {
 					...created,
-					width,
-					height,
 					tracks: created.tracks.map((track) => ({
 						...track,
 						clips: track.clips
@@ -7108,28 +7201,17 @@ export function createAgentTools(api: EditorApi) {
 							// retimes, and retiming a variant silently changes how
 							// the narration sounds.
 							.filter((clip) => cutAt === null || clip.startFrame < cutAt)
-							.map((clip) => {
-								const trimmed =
-									cutAt !== null && clip.endFrame > cutAt
-										? { ...clip, endFrame: cutAt }
-										: clip;
-								if (trimmed.mediaType === "audio" || trimmed.mediaType === "text")
-									return trimmed;
-								// Cover the new frame: the source has to be at
-								// least as wide as the canvas in the axis it is
-								// short on, or the reframe shows background.
-								const source = aspectOf(trimmed, canvasAspect);
-								const cover =
-									source >= canvasAspect
-										? { width: source / canvasAspect, height: 1 }
-										: { width: 1, height: canvasAspect / source };
-								return {
-									...trimmed,
-									transform: { ...trimmed.transform, ...cover },
-								};
-							}),
+							.map((clip) =>
+								cutAt !== null && clip.endFrame > cutAt
+									? { ...clip, endFrame: cutAt }
+									: clip,
+							),
 					})),
 				};
+				// The same reframe reframe_timeline performs, so a variant and an
+				// in-place reframe of one cut come out framed identically.
+				const variant = reframeTimeline(trimmed, w / h, state.assets);
+				const { width, height } = variant;
 				api.replaceTimeline(variant);
 				built.push({
 					timelineId: variant.id,

@@ -13,6 +13,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { AssetModel } from "./media";
+import { withDefaults } from "./model";
 import { parseProject } from "./project";
 import { splitAt } from "./reducers";
 import { useEditorState } from "./state";
@@ -179,5 +180,75 @@ describe("a full editing session", () => {
 		expect(result.current.state.dirty).toBe(false);
 		// Undo must not reach across a new project into the last one.
 		expect(result.current.canUndo).toBe(false);
+	});
+});
+
+describe("placing phone footage", () => {
+	const phone = (over: Partial<AssetModel> = {}) =>
+		asset({
+			id: "phone",
+			name: "IMG_0042.MOV",
+			width: 1080,
+			height: 1920,
+			fps: 59.94,
+			hasAudio: true,
+			fromRecording: false,
+			hasCursorTelemetry: false,
+			...over,
+		});
+
+	it("makes a new project vertical, at the footage's frame rate", () => {
+		const { result } = renderHook(() => useEditorState());
+		act(() => result.current.addAssets([phone()]));
+		act(() => result.current.placeAsset("phone", 0));
+		const { width, height, fps } = result.current.timeline;
+		expect([width, height, fps]).toEqual([1080, 1920, 60]);
+		// The clip is measured at the rate the project ended up with.
+		const [clip] = clipsOf(result.current);
+		expect(clip.endFrame - clip.startFrame).toBe(10 * 60);
+		// One undo takes the placement and the reshaping back together.
+		act(() => result.current.undo());
+		expect([result.current.timeline.width, result.current.timeline.height]).toEqual([
+			1920, 1080,
+		]);
+	});
+
+	it("never lands on the caption track or deletes the captions there", () => {
+		const { result } = renderHook(() => useEditorState());
+		act(() => result.current.addAssets([phone(), phone({ id: "second", name: "B.MOV" })]));
+		act(() => result.current.placeAsset("phone", 0));
+		const caption = withDefaults({
+			id: "cap-1",
+			name: "Caption",
+			mediaType: "text",
+			startFrame: 0,
+			endFrame: 60,
+			captionGroupId: "g",
+		});
+		act(() =>
+			result.current.commit("Captions", (t) => ({
+				...t,
+				tracks: [
+					{
+						id: "trk-cc-g",
+						name: "CC",
+						kind: "video",
+						muted: false,
+						hidden: false,
+						clips: [caption],
+					},
+					...t.tracks,
+				],
+			})),
+		);
+
+		// Dropped right over the caption: it must go on the footage track.
+		act(() => result.current.placeAsset("second", 0));
+		const cc = result.current.timeline.tracks.find((t) => t.id === "trk-cc-g");
+		expect(cc?.clips.map((c) => c.id)).toEqual(["cap-1"]);
+		const footage = result.current.timeline.tracks.find((t) =>
+			t.clips.some((c) => c.assetId === "second"),
+		);
+		expect(footage?.id).not.toBe("trk-cc-g");
 	});
 });
