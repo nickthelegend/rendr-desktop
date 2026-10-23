@@ -23,6 +23,7 @@ import type { CommentModel } from "./comments";
 import { boxSizeAt, positionRow } from "./keyframes";
 import type { AssetModel } from "./media";
 import { type ClipModel, type Transform, withDefaults, type ZoomRegionModel } from "./model";
+import { clipFace, frameFace } from "./punchIns";
 import { splitAt, type TimelineModel } from "./reducers";
 import { nodeLabel, runOrder, type WorkflowModel, type WorkflowNode } from "./workflow";
 
@@ -204,6 +205,14 @@ export function reframeTimeline(
 				picture >= canvasAspect
 					? { centerX: 0.5, centerY: 0.5, width: picture / canvasAspect, height: 1 }
 					: { centerX: 0.5, centerY: 0.5, width: 1, height: canvasAspect / picture };
+			// A centre crop of a talking head often cuts the speaker in half; with
+			// a face track the crop slides to them instead, face in the upper third.
+			const face = clipFace(
+				clip,
+				assets.find((asset) => asset.id === clip.assetId),
+				timeline.fps,
+			);
+			if (face) to = frameFace(to, face, picture, canvasAspect, { x: 0.5, y: 0.38 });
 		} else {
 			const width = from.width * keepX;
 			const height = from.height * keepY;

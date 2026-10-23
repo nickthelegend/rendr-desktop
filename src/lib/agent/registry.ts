@@ -131,6 +131,7 @@ export const DECLARED_TOOLS = [
 	"analyze_footage",
 	"remove_background",
 	"add_graphic",
+	"add_punch_ins",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */

@@ -168,6 +168,16 @@ export interface ClipModel {
 	/** Clip-relative word timing, so karaoke survives moving and trimming. */
 	captionWords?: Array<{ text: string; startFrame: number; endFrame: number }>;
 
+	/**
+	 * Set by add_punch_ins: the box the clip had before it was pushed in, so a
+	 * second run (or 'off') starts from the original framing instead of
+	 * compounding one push on another.
+	 */
+	punch?: {
+		base: { centerX: number; centerY: number; width: number; height: number };
+		factor: number;
+	};
+
 	/** Graphic clips only: the drawn elements and how they enter (graphics.ts). */
 	graphic?: GraphicSpec;
 

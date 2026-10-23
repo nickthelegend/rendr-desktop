@@ -230,3 +230,84 @@ describe("remove_background", () => {
 		expect(parseElements([])).toHaveProperty("error");
 	});
 });
+
+describe("add_punch_ins", () => {
+	const faceTrack = {
+		width: 1920,
+		height: 1080,
+		duration: 30,
+		interval: 1,
+		samples: Array.from({ length: 30 }, (_, t) => ({
+			t,
+			faces: [{ x: 0.35, y: 0.2, w: 0.1, h: 0.2, confidence: 0.95 }],
+		})),
+	};
+	const assets = [
+		{ id: "asset-cam", type: "video", width: 1920, height: 1080, url: "blob:x", faceTrack },
+	];
+	const segments = () =>
+		timelineWith([
+			footageClip({ id: "s0", startFrame: 0, endFrame: 60 }),
+			footageClip({ id: "s1", startFrame: 60, endFrame: 120, trimStartFrame: 90 }),
+			footageClip({ id: "s2", startFrame: 120, endFrame: 180, trimStartFrame: 200 }),
+			footageClip({ id: "s3", startFrame: 180, endFrame: 240, trimStartFrame: 300 }),
+		]);
+
+	it("punches every other segment on the face, keeping the face still", async () => {
+		const start = segments();
+		const { api, commit } = fakeApi(start, assets);
+		const result = await createCreatorTools(api).add_punch_ins({});
+		expect(payload(result)).toMatchObject({ changed: true, segments: 4, punched: 2 });
+		const clips = committed(commit, start).tracks[0].clips;
+		expect(clips.map((clip) => clip.transform.width.toFixed(2))).toEqual([
+			"1.00",
+			"1.15",
+			"1.00",
+			"1.15",
+		]);
+		// The face (centre x 0.4 in the footage) is still at x 0.4 on screen.
+		const pushed = clips[1].transform;
+		const faceX = pushed.centerX - pushed.width / 2 + 0.4 * pushed.width;
+		expect(faceX).toBeCloseTo(0.4, 2);
+	});
+
+	it("replaces its own punch-ins on a second run instead of stacking, and 'off' restores", async () => {
+		const start = segments();
+		const first = fakeApi(start, assets);
+		await createCreatorTools(first.api).add_punch_ins({ amount: 1.2 });
+		const once = committed(first.commit, start);
+
+		const second = fakeApi(once, assets);
+		await createCreatorTools(second.api).add_punch_ins({ amount: 1.2 });
+		const twice = committed(second.commit, once);
+		// Unchanged the second time: same result, not 1.44.
+		expect(twice.tracks[0].clips[1].transform.width).toBeCloseTo(1.2);
+
+		const third = fakeApi(once, assets);
+		await createCreatorTools(third.api).add_punch_ins({ mode: "off" });
+		const restored = committed(third.commit, once).tracks[0].clips;
+		expect(restored.every((clip) => clip.transform.width === 1 && !clip.punch)).toBe(true);
+	});
+
+	it("writes a slow push as keyframes, and leaves motion it didn't make alone", async () => {
+		const authored = footageClip({
+			id: "mine",
+			startFrame: 240,
+			endFrame: 300,
+			keyframes: { position: [{ frame: 0, values: [0, 0], interp: "linear" }] },
+		});
+		const start = timelineWith([
+			footageClip({ id: "s0", startFrame: 0, endFrame: 240 }),
+			authored,
+		]);
+		const { api, commit } = fakeApi(start, assets);
+		const result = await createCreatorTools(api).add_punch_ins({
+			style: "push",
+			pattern: "every",
+		});
+		expect(payload(result).skipped).toEqual(["mine"]);
+		const clips = committed(commit, start).tracks[0].clips;
+		expect(clips[0].keyframes?.scale?.[1].values[0]).toBeCloseTo(1.15);
+		expect(clips[1]).toBe(authored);
+	});
+});

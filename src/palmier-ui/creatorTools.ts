@@ -24,6 +24,16 @@ import {
 import { type ClipBackground, parseBackground } from "./matte";
 import { type AssetModel, importFiles } from "./media";
 import type { ClipModel } from "./model";
+import { footageTrackIndex } from "./placement";
+import {
+	boxOf,
+	clipFace,
+	faceInFrame,
+	type PunchPattern,
+	punchBox,
+	punchedIndexes,
+	pushKeyframes,
+} from "./punchIns";
 import type { TimelineModel } from "./reducers";
 import { findClip } from "./reducers";
 import type { EditorApi } from "./state";
@@ -509,6 +519,134 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 							: undefined,
 				}),
 			);
+		},
+
+		add_punch_ins(args: Record<string, unknown>): ToolResult {
+			const off = args.mode === "off" || args.amount === 1;
+			const amount = typeof args.amount === "number" ? args.amount : 1.15;
+			if (!off && (amount < 1.02 || amount > 1.8)) {
+				return fail(
+					"invalid_argument",
+					"amount is the push-in scale, 1.02–1.8 (1.15 is the classic jump-cut punch).",
+				);
+			}
+			const pattern: PunchPattern = args.pattern === "every" ? "every" : "alternate";
+			const style = args.style === "push" ? "push" : "cut";
+			const startWith = args.startWith === "tight" ? "tight" : "wide";
+
+			const requested = Array.isArray(args.clipIds) ? args.clipIds.map(String) : null;
+			const footageTrack = timeline.tracks[footageTrackIndex(timeline)];
+			const candidates = requested
+				? videoClips().filter((clip) => requested.includes(clip.id))
+				: (footageTrack?.clips ?? []).filter((clip) => clip.mediaType === "video");
+			const segments = [...candidates].sort((a, b) => a.startFrame - b.startFrame);
+			if (segments.length === 0) return fail("not_found", "No footage clips to punch in on.");
+
+			const canvasAspect = timeline.width / timeline.height;
+			const punched = new Set(
+				off
+					? []
+					: punchedIndexes(segments.length, pattern, startWith).map(
+							(index) => segments[index].id,
+						),
+			);
+			const skipped: string[] = [];
+			let withoutFace = 0;
+			const plans = new Map<string, Partial<ClipModel>>();
+
+			for (const clip of segments) {
+				const base = clip.punch?.base ?? boxOf(clip.transform);
+				const animated = clip.keyframes?.position?.length || clip.keyframes?.scale?.length;
+				// Motion someone else authored is theirs; a push of ours we can redo.
+				if (animated && !clip.punch) {
+					skipped.push(clip.id);
+					continue;
+				}
+				const restKeyframes = clip.keyframes ? { ...clip.keyframes } : undefined;
+				if (clip.punch && restKeyframes) {
+					delete restKeyframes.position;
+					delete restKeyframes.scale;
+				}
+				const restored: Partial<ClipModel> = {
+					transform: { ...clip.transform, ...base },
+					keyframes:
+						restKeyframes && Object.keys(restKeyframes).length > 0
+							? restKeyframes
+							: undefined,
+					punch: undefined,
+				};
+				if (!punched.has(clip.id)) {
+					if (clip.punch) plans.set(clip.id, restored);
+					continue;
+				}
+				const asset = state.assets.find((entry) => entry.id === clip.assetId);
+				const pictureAspect =
+					asset && asset.width > 0 && asset.height > 0
+						? asset.width / asset.height
+						: canvasAspect;
+				const face = clipFace(clip, asset, timeline.fps);
+				if (!face) withoutFace += 1;
+				// No face track: aim at the upper middle, where a presenter's face usually is.
+				const focus = faceInFrame(
+					base,
+					face ?? { x: 0.5, y: 0.38 },
+					pictureAspect,
+					canvasAspect,
+				);
+				const target = punchBox(base, focus, amount);
+				if (style === "push") {
+					const { scale, position } = pushKeyframes(
+						base,
+						target,
+						clip.endFrame - clip.startFrame,
+					);
+					plans.set(clip.id, {
+						...restored,
+						keyframes: { ...(restored.keyframes ?? {}), scale, position },
+						punch: { base, factor: amount },
+					});
+				} else {
+					plans.set(clip.id, {
+						...restored,
+						transform: { ...clip.transform, ...target },
+						punch: { base, factor: amount },
+					});
+				}
+			}
+
+			if (plans.size === 0) {
+				return ok({
+					changed: false,
+					skipped,
+					note: "Nothing to change — no punched clips to restore, or every clip already has its own motion.",
+				});
+			}
+			const apply = (t: TimelineModel): TimelineModel => ({
+				...t,
+				tracks: t.tracks.map((track) => ({
+					...track,
+					clips: track.clips.map((clip) => {
+						const plan = plans.get(clip.id);
+						if (!plan) return clip;
+						const next = { ...clip, ...plan };
+						if (!plan.punch) delete next.punch;
+						if (!plan.keyframes) delete next.keyframes;
+						return next;
+					}),
+				})),
+			});
+			return mutate(off ? "Remove punch-ins" : `Punch-ins (${style})`, apply, () => ({
+				changed: true,
+				segments: segments.length,
+				punched: off ? 0 : punched.size,
+				amount: off ? 1 : amount,
+				style,
+				skipped: skipped.length > 0 ? skipped : undefined,
+				note:
+					withoutFace > 0
+						? `${withoutFace} segment(s) had no face track, so the push aims at the upper middle. Run analyze_footage for face-centred punch-ins.`
+						: undefined,
+			}));
 		},
 
 		async remove_background(args: Record<string, unknown>): Promise<ToolResult> {

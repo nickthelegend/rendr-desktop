@@ -144,4 +144,31 @@ export const CREATOR_TOOLS: AgentTool[] = [
 			},
 		}),
 	},
+	{
+		name: "add_punch_ins",
+		description:
+			"Jump-cut punch-ins for talking-head footage: pushes in on the speaker's face on alternating segments, so each cut reads as a deliberate camera change instead of a skip. Run it AFTER cutting (remove_silence / remove_words), when the footage track is a run of short segments. Uses the face track from analyze_footage to keep the face exactly where it was on screen while everything grows; without one it aims at the upper middle. Never uncovers the frame's edge.\n\nstyle 'cut' (default) is the classic hard punch; 'push' is a slow push-in across each chosen segment (good for a single long take). Re-running replaces earlier punch-ins rather than stacking them; mode 'off' (or amount 1) restores the original framing. Clips with motion you authored yourself are skipped. Undoable.",
+		inputSchema: object({
+			clipIds: {
+				type: "array",
+				items: { type: "string" },
+				description:
+					"Segments to consider, in timeline order. Default: every clip on the main footage track.",
+			},
+			amount: { type: "number", description: "Push-in scale, 1.02–1.8. Default 1.15." },
+			pattern: {
+				type: "string",
+				enum: ["alternate", "every"],
+				description:
+					"'alternate' (default) punches every other segment; 'every' punches all of them.",
+			},
+			startWith: {
+				type: "string",
+				enum: ["wide", "tight"],
+				description: "Whether the first segment is wide (default) or punched.",
+			},
+			style: { type: "string", enum: ["cut", "push"] },
+			mode: { type: "string", enum: ["on", "off"] },
+		}),
+	},
 ];
