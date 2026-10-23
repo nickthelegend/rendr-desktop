@@ -215,10 +215,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	) => {
 		// A file that's still on disk is read there by the main process — a 4K
 		// take can be gigabytes, and copying it through IPC would double that in
-		// memory. Only footage with no path (a recording, a download) is sent as bytes.
-		if (request.sourcePath) return ipcRenderer.invoke("rendr-vision:analyze", null, request);
-		const bytes = await (await fetch(url)).arrayBuffer();
-		return ipcRenderer.invoke("rendr-vision:analyze", bytes, request);
+		// memory. Only footage with no path (a recording, a download), or whose
+		// file has moved since, is sent as bytes.
+		const blob = await (await fetch(url)).blob();
+		if (request.sourcePath) {
+			const result = await ipcRenderer.invoke("rendr-vision:analyze", null, {
+				...request,
+				expectedSize: blob.size,
+			});
+			if (result?.code !== "source_moved") return result;
+		}
+		const bytes = await blob.arrayBuffer();
+		return ipcRenderer.invoke("rendr-vision:analyze", bytes, {
+			...request,
+			sourcePath: undefined,
+		});
 	},
 	/** Keeps something Rendr made (a thumbnail, a still) as a real file under ~/Pictures/Rendr. */
 	saveGenerated: (bytes: ArrayBuffer, name: string) =>

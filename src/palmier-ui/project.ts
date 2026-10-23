@@ -256,8 +256,15 @@ export function countOfflineAssets(assets: readonly AssetModel[]): number {
 export function relinkAssets(
 	offline: readonly AssetModel[],
 	incoming: readonly AssetModel[],
+	options: { pairExactly?: boolean } = {},
 ): { relinked: AssetModel[]; unmatched: AssetModel[] } {
-	const byName = new Map(incoming.map((asset) => [asset.name, asset]));
+	// A caller that knows which asset a file belongs to (auto-relink, by id)
+	// pairs them directly; otherwise files are matched by name, the
+	// drop-a-folder case.
+	const byName =
+		options.pairExactly && offline.length === 1 && incoming.length === 1
+			? new Map([[offline[0].name, incoming[0]]])
+			: new Map(incoming.map((asset) => [asset.name, asset]));
 	const relinked: AssetModel[] = [];
 	const used = new Set<string>();
 
@@ -277,8 +284,10 @@ export function relinkAssets(
 				height: match.height,
 				hasAudio: match.hasAudio,
 				url: match.url,
-				// The file's location is the one thing a relink should update.
-				sourcePath: match.sourcePath ?? asset.sourcePath,
+				// The file's location is the one thing a relink should update; a
+				// relink from a file with no path forgets the old one, which no
+				// longer describes where this footage is.
+				sourcePath: match.sourcePath,
 				offline: false,
 			});
 		} else {

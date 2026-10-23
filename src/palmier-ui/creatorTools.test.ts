@@ -486,3 +486,97 @@ describe("remove_words keeps every word it didn't cut", () => {
 		expect(after).toEqual(["is", "punch", "ins.", "I", "think"]);
 	});
 });
+
+describe("review fixes", () => {
+	it("doesn't cut the background out of a screen recording by default", async () => {
+		const start = timelineWith([
+			footageClip(),
+			footageClip({ id: "screen", assetId: "rec", startFrame: 300, endFrame: 400 }),
+		]);
+		const assets = [
+			{
+				id: "asset-cam",
+				type: "video",
+				url: "blob:x",
+				matteAssetId: "m",
+				personCoverage: 0.9,
+			},
+			{
+				id: "rec",
+				type: "video",
+				url: "blob:r",
+				fromRecording: true,
+				hasCursorTelemetry: true,
+			},
+			{ id: "m", type: "video", url: "blob:m", isMatte: true },
+		];
+		const { api, commit } = fakeApi(start, assets);
+		const result = await createCreatorTools(api).remove_background({
+			mode: "color",
+			color: "#0f0",
+		});
+		expect(payload(result).clipIds).toEqual(["cam"]);
+		expect(committed(commit, start).tracks[0].clips[1].background).toBeUndefined();
+	});
+
+	it("cuts retakes from the second caption group by the whole transcript's numbering", async () => {
+		const group = (id: string, groupId: string, start: number, texts: string[]) =>
+			withDefaults({
+				id,
+				name: id,
+				mediaType: "text",
+				startFrame: start,
+				endFrame: start + 200,
+				captionGroupId: groupId,
+				captionWords: texts.map((text, index) => ({
+					text,
+					startFrame: index * 10,
+					endFrame: index * 10 + 8,
+				})),
+			});
+		const first = group("c1", "g1", 0, ["Welcome", "to", "the", "show."]);
+		const second = group("c2", "g2", 300, [
+			"So",
+			"today",
+			"we",
+			"go,",
+			"so",
+			"today",
+			"we",
+			"go",
+			"far.",
+		]);
+		const start = timelineWith([footageClip({ endFrame: 600 })]);
+		start.tracks.unshift({
+			id: "trk-cc",
+			name: "CC",
+			kind: "video",
+			muted: false,
+			hidden: false,
+			clips: [first, second],
+		});
+		const { api } = fakeApi(start);
+		const body = payload(await createCreatorTools(api).find_retakes({ captionGroupId: "g2" }));
+		// "So today we go," is words 4–7 of the whole transcript, not 0–3 ("Welcome to the show.").
+		expect(body.retakes[0].words).toEqual([4, 7]);
+	});
+
+	it("keeps a mind map off the presenter even with no face track", async () => {
+		const start = timelineWith([footageClip()]);
+		const { api, commit } = fakeApi(start, [
+			{ id: "asset-cam", type: "video", width: 1920, height: 1080, url: "blob:x" },
+		]);
+		await createCreatorTools(api).add_graphic({
+			template: "mind_map",
+			nodes: ["A", "B", "C", "D", "E", "F"],
+			layer: "front",
+		});
+		const cards = committed(commit, start).tracks[0].clips[0].graphic?.elements.filter(
+			(element) => element.type === "box",
+		) as Array<{ x: number; y: number }>;
+		for (const card of cards) {
+			const onPresenter = Math.abs(card.x - 0.5) < 0.2 && Math.abs(card.y - 0.55) < 0.45;
+			expect(onPresenter).toBe(false);
+		}
+	});
+});

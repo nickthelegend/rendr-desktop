@@ -70,6 +70,16 @@ export function ClipMattedCanvas({
 		};
 		footage.addEventListener("loadeddata", onLoaded, { once: true });
 		matte.addEventListener("loadeddata", onLoaded, { once: true });
+		// A matte that won't load leaves the footage as shot — what the export
+		// does too — rather than a clip that never paints.
+		matte.addEventListener(
+			"error",
+			() => {
+				matteRef.current = null;
+				onLoaded();
+			},
+			{ once: true },
+		);
 		footageRef.current = footage;
 		matteRef.current = matte;
 		return () => {
@@ -105,47 +115,48 @@ export function ClipMattedCanvas({
 		const canvas = canvasRef.current;
 		const footage = footageRef.current;
 		const matte = matteRef.current;
-		if (!canvas || !footage || !matte || ready === 0) return;
+		if (!canvas || !footage || ready === 0) return;
 		let cancelled = false;
 
-		void Promise.all([seekTo(footage, sourceSeconds), seekTo(matte, sourceSeconds)]).then(
-			() => {
-				if (cancelled) return;
-				const box = canvas.getBoundingClientRect();
-				const width = Math.max(2, Math.round(box.width));
-				const height = Math.max(2, Math.round(box.height));
-				if (canvas.width !== width || canvas.height !== height) {
-					canvas.width = width;
-					canvas.height = height;
-				}
-				const context = canvas.getContext("2d");
-				if (!context || footage.videoWidth === 0) return;
-				// Cover-fit, matching object-fit: cover on the plain path; the
-				// wrapper's clip-path still does the cropping.
-				const scale = Math.max(width / footage.videoWidth, height / footage.videoHeight);
-				const drawW = footage.videoWidth * scale;
-				const drawH = footage.videoHeight * scale;
-				context.clearRect(0, 0, width, height);
-				drawMatted(context, {
-					source: footage,
-					matte,
-					crop: { top: 0, right: 0, bottom: 0, left: 0 },
-					dest: {
-						x: (width - drawW) / 2,
-						y: (height - drawH) / 2,
-						width: drawW,
-						height: drawH,
-					},
-					boxWidth: width,
-					boxHeight: height,
-					background: backgroundRef.current,
-					backgroundImage: imageRef.current,
-					// Blur and feather are authored at 1080p; scale them to this canvas.
-					pixelScale: height / 1080,
-					gradeFilter,
-				});
-			},
-		);
+		void Promise.all([
+			seekTo(footage, sourceSeconds),
+			matte ? seekTo(matte, sourceSeconds) : Promise.resolve(),
+		]).then(() => {
+			if (cancelled) return;
+			const box = canvas.getBoundingClientRect();
+			const width = Math.max(2, Math.round(box.width));
+			const height = Math.max(2, Math.round(box.height));
+			if (canvas.width !== width || canvas.height !== height) {
+				canvas.width = width;
+				canvas.height = height;
+			}
+			const context = canvas.getContext("2d");
+			if (!context || footage.videoWidth === 0) return;
+			// Cover-fit, matching object-fit: cover on the plain path; the
+			// wrapper's clip-path still does the cropping.
+			const scale = Math.max(width / footage.videoWidth, height / footage.videoHeight);
+			const drawW = footage.videoWidth * scale;
+			const drawH = footage.videoHeight * scale;
+			context.clearRect(0, 0, width, height);
+			drawMatted(context, {
+				source: footage,
+				matte,
+				crop: { top: 0, right: 0, bottom: 0, left: 0 },
+				dest: {
+					x: (width - drawW) / 2,
+					y: (height - drawH) / 2,
+					width: drawW,
+					height: drawH,
+				},
+				boxWidth: width,
+				boxHeight: height,
+				background: backgroundRef.current,
+				backgroundImage: imageRef.current,
+				// Blur and feather are authored at 1080p; scale them to this canvas.
+				pixelScale: height / 1080,
+				gradeFilter,
+			});
+		});
 		return () => {
 			cancelled = true;
 		};

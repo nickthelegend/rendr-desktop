@@ -43,6 +43,8 @@ export interface VisionRequest {
 	name: string;
 	/** The footage's own file, when it has one; read in place rather than copied. */
 	sourcePath?: string;
+	/** The footage's size in bytes, to tell its file from another now at the same path. */
+	expectedSize?: number;
 	matte: boolean;
 	faces: boolean;
 	quality?: "fast" | "balanced" | "accurate";
@@ -67,6 +69,8 @@ export interface FaceTrackFile {
 
 export interface VisionResult {
 	ok: boolean;
+	/** "source_moved": the saved path no longer holds this footage — send the bytes instead. */
+	code?: string;
 	/** Content hash of the footage, so the renderer can tell runs apart. */
 	key?: string;
 	mattePath?: string;
@@ -174,12 +178,21 @@ export async function analyzeFootage(
 			reason: "Footage analysis (background removal, face tracking) uses Apple's Vision framework, so it runs on macOS only for now.",
 		};
 	}
-	const inPlace =
-		!bytes && request.sourcePath && existsSync(request.sourcePath) ? request.sourcePath : null;
+	// The saved path is only trusted while it still holds this footage: a file
+	// that moved, or a different file now at the same path, would analyse the
+	// wrong picture. The renderer then sends the bytes it has instead.
+	let inPlace: string | null = null;
+	if (!bytes && request.sourcePath) {
+		const stat = await fs.stat(request.sourcePath).catch(() => null);
+		if (stat?.isFile() && (!request.expectedSize || stat.size === request.expectedSize)) {
+			inPlace = request.sourcePath;
+		}
+	}
 	if (!bytes && !inPlace) {
 		return {
 			ok: false,
-			reason: "The footage's file isn't where it was imported from. Import it again.",
+			code: "source_moved",
+			reason: "The footage's file isn't where it was imported from.",
 		};
 	}
 	const key = inPlace
@@ -189,10 +202,34 @@ export async function analyzeFootage(
 				.update(Buffer.from(bytes as ArrayBuffer))
 				.digest("hex")
 				.slice(0, 32);
-	const dir = path.join(cacheRoot(), key);
+	// Quality changes the matte, so it's part of what a cached result means.
+	const quality = request.quality && request.quality !== "balanced" ? `-${request.quality}` : "";
+	const dir = path.join(cacheRoot(), `${key}${quality}`);
 	const cached = await readCached(dir, request);
 	if (cached) return cached;
+	// The same footage asked for twice at once runs once: two helpers writing
+	// one folder would delete each other's files.
+	const running = inflight.get(dir);
+	if (running) return running;
+	const job = analyseInto(dir, key, inPlace, bytes, request, onProgress);
+	inflight.set(dir, job);
+	try {
+		return await job;
+	} finally {
+		inflight.delete(dir);
+	}
+}
 
+const inflight = new Map<string, Promise<VisionResult>>();
+
+async function analyseInto(
+	dir: string,
+	key: string,
+	inPlace: string | null,
+	bytes: ArrayBuffer | null,
+	request: VisionRequest,
+	onProgress: (progress: number) => void,
+): Promise<VisionResult> {
 	await fs.mkdir(dir, { recursive: true });
 	// Footage read in place is the user's own file: never written, never removed.
 	// Only a copy Rendr made itself is cleaned up afterwards.

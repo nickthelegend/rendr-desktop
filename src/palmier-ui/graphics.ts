@@ -438,7 +438,8 @@ export interface KeepOut {
 	ry: number;
 }
 
-const DEFAULT_KEEP_OUT: KeepOut = { cx: 0.5, cy: 0.55, rx: 0.2, ry: 0.45 };
+/** Where a presenter usually stands, for when nothing better is known. */
+export const DEFAULT_KEEP_OUT: KeepOut = { cx: 0.5, cy: 0.55, rx: 0.2, ry: 0.45 };
 
 /**
  * Lays nodes out around the speaker: on an ellipse round the frame, skipping

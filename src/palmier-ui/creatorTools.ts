@@ -15,6 +15,7 @@ import {
 import {
 	buildTemplate,
 	DEFAULT_GRAPHIC_STYLE,
+	DEFAULT_KEEP_OUT,
 	type GraphicElement,
 	type GraphicSpec,
 	type GraphicStyle,
@@ -22,6 +23,7 @@ import {
 	type KeepOut,
 	settleSeconds,
 } from "./graphics";
+import { clipAtFrame } from "./keyframes";
 import { type ClipBackground, parseBackground } from "./matte";
 import { type AssetModel, importFiles, type PathedFile } from "./media";
 import type { ClipModel } from "./model";
@@ -182,7 +184,12 @@ export async function ensureAnalysis(
 	listenForProgress();
 	const key = `${asset.id}::${asset.name}`;
 	let job = jobs.get(key);
-	if (!job || (job.outcome && !job.outcome.ok)) {
+	// A finished job is only worth reusing while its matte is still usable: after
+	// a reopen or relink the matte can be offline, and "ok" from earlier would
+	// hand callers a dead file. A rerun is a cache read in the main process.
+	const spent =
+		job?.outcome !== undefined && (!job.outcome.ok || !hasUsableMatte(asset, api.state.assets));
+	if (!job || spent) {
 		const created: AnalysisJob = {
 			progress: 0,
 			promise: Promise.resolve({ ok: false, reason: "" }),
@@ -456,6 +463,25 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 				? state.assets.find((entry) => entry.id === footage.clip.assetId)
 				: undefined;
 
+			// Where the speaker is in the frame at the graphic's start — through the
+			// clip's own framing at that moment — or, with no face track, where a
+			// presenter usually stands, so cards never land on them by default.
+			const speakerRegion = (): KeepOut => {
+				if (!footage) return DEFAULT_KEEP_OUT;
+				const framed = clipAtFrame(footage.clip, start);
+				const pictureAspect =
+					footageAsset && footageAsset.width > 0 && footageAsset.height > 0
+						? footageAsset.width / footageAsset.height
+						: timeline.width / timeline.height;
+				return (
+					keepOutFromFaces(footageAsset?.faceTrack, {
+						box: boxOf(framed.transform),
+						pictureAspect,
+						canvasAspect: timeline.width / timeline.height,
+					}) ?? DEFAULT_KEEP_OUT
+				);
+			};
+
 			let elements: GraphicElement[];
 			if (template === "custom") {
 				const parsed = parseElements(args.elements);
@@ -487,9 +513,7 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 						: undefined,
 					stagger: typeof args.stagger === "number" ? args.stagger : undefined,
 					keepOut: [
-						...(keepOutFromFaces(footageAsset?.faceTrack)
-							? [keepOutFromFaces(footageAsset?.faceTrack) as KeepOut]
-							: []),
+						speakerRegion(),
 						...otherGraphicRegions(start, start + 1, existing?.id),
 					],
 				});
@@ -775,7 +799,17 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 
 		async find_retakes(args: Record<string, unknown>): Promise<ToolResult> {
 			const groupId = asString(args.captionGroupId) ?? undefined;
-			const words = transcriptWords(timeline, groupId);
+			// Indices must be the whole transcript's, the numbering remove_words
+			// cuts by — transcriptWords(timeline, group) renumbers from zero, so a
+			// group's word 3 would have cut the first group's word 3.
+			const groupOf = new Map(
+				timeline.tracks.flatMap((track) =>
+					track.clips.map((clip) => [clip.id, clip.captionGroupId]),
+				),
+			);
+			const words = transcriptWords(timeline).filter(
+				(word) => !groupId || groupOf.get(word.clipId) === groupId,
+			);
 			if (words.length === 0) {
 				return fail(
 					"no_transcript",
@@ -876,6 +910,12 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 				typeof args.atSeconds === "number"
 					? args.atSeconds
 					: (bestFaceMoment(faceTrack) ?? asset.durationSeconds / 2);
+			if (faceTrack.samples.length === 0) {
+				return fail(
+					"no_face",
+					"Nobody was found in this footage, so there's no speaker to put on the thumbnail.",
+				);
+			}
 			const nearest = faceTrack.samples.reduce((best, sample) =>
 				Math.abs(sample.t - at) < Math.abs(best.t - at) ? sample : best,
 			);
@@ -981,8 +1021,16 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 				? videoClips().filter((clip) => requested.includes(clip.id))
 				: videoClips().filter((clip) => {
 						const asset = state.assets.find((entry) => entry.id === clip.assetId);
-						// Without a clip list, only footage that has (or may have) a person.
-						return asset && !asset.isMatte && (asset.personCoverage ?? 1) > 0.2;
+						// Without a clip list, only camera footage that has (or may have)
+						// a person — never a screen recording, whose "background" is the
+						// whole picture and would come back as a flat colour.
+						return (
+							asset &&
+							!asset.isMatte &&
+							!asset.fromRecording &&
+							!asset.hasCursorTelemetry &&
+							(asset.personCoverage ?? 1) > 0.2
+						);
 					});
 			if (requested) {
 				const missing = requested.filter((id) => !targets.some((clip) => clip.id === id));
@@ -1029,7 +1077,23 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 				}
 			}
 
-			const ids = new Set(targets.map((clip) => clip.id));
+			// Footage that turned out to have nobody in it is left alone unless it
+			// was asked for by name: its "person" matte is empty.
+			const empty = new Set(
+				analysed
+					.filter((summary) => Number(summary.personCoverage ?? 1) <= 0.2)
+					.map((summary) => String(summary.assetId)),
+			);
+			const chosen = requested
+				? targets
+				: targets.filter((clip) => !empty.has(clip.assetId ?? ""));
+			if (chosen.length === 0) {
+				return fail(
+					"no_person",
+					"Nobody is in shot in that footage, so there's no background to separate.",
+				);
+			}
+			const ids = new Set(chosen.map((clip) => clip.id));
 			const next = setClipBackgrounds(timeline, ids, background);
 			if (next === timeline)
 				return ok({ changed: false, note: "Those clips already look like that." });

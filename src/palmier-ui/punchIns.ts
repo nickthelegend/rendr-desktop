@@ -211,12 +211,12 @@ export function faceFollowKeyframes(
 		const next = frameFace(current, point, pictureAspect, canvasAspect, target);
 		// Hold where we were until the pan starts, then ease to the new framing.
 		const start = Math.max((keys[keys.length - 1]?.frame ?? 0) + 1, local - panFrames);
+		const end = Math.min(span - 1, start + panFrames);
+		// Too close to the clip's end (or the last pan) to fit another: keep the
+		// rows in order rather than squeeze a pan in backwards.
+		if (end <= start) continue;
 		keys.push({ frame: start, values: corner(current), interp: "smooth" });
-		keys.push({
-			frame: Math.min(span - 1, start + panFrames),
-			values: corner(next),
-			interp: "smooth",
-		});
+		keys.push({ frame: end, values: corner(next), interp: "smooth" });
 		current = next;
 	}
 	// One keyframe is a static framing, which the transform already expresses.

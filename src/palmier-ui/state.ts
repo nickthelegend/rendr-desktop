@@ -654,7 +654,15 @@ export function useEditorState() {
 
 	/** Import dropped or picked files, reporting anything that could not be read. */
 	const importMedia = useCallback(
-		async (files: readonly File[]): Promise<AssetModel[]> => {
+		async (
+			files: readonly File[],
+			/**
+			 * Relink exactly this offline asset with the (single) file, rather
+			 * than matching by name — two takes called IMG_0001.MOV must each get
+			 * their own file back.
+			 */
+			options: { relinkTo?: string } = {},
+		): Promise<AssetModel[]> => {
 			if (files.length === 0) return [];
 			const { assets, rejected } = await importFiles(files);
 			for (const reason of rejected) toast(reason, "error");
@@ -667,11 +675,21 @@ export function useEditorState() {
 			 * so the caller can't assume these are the freshly-read `assets`.
 			 */
 			const plan = (existing: readonly AssetModel[]) => {
-				const offline = existing.filter((asset) => asset.offline);
+				const offline = existing.filter(
+					(asset) =>
+						asset.offline && (!options.relinkTo || asset.id === options.relinkTo),
+				);
+				// Asked to relink one asset that's no longer waiting for its file:
+				// adding the file as new media would only duplicate it.
+				if (options.relinkTo && offline.length === 0) {
+					return { next: [...existing], landed: [], restored: 0 };
+				}
 				if (offline.length === 0) {
 					return { next: [...existing, ...assets], landed: assets, restored: 0 };
 				}
-				const { relinked, unmatched } = relinkAssets(offline, assets);
+				const { relinked, unmatched } = relinkAssets(offline, assets, {
+					pairExactly: Boolean(options.relinkTo),
+				});
 				const relinkedById = new Map(relinked.map((asset) => [asset.id, asset]));
 				return {
 					next: [

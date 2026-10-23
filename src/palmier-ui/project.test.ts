@@ -218,3 +218,30 @@ describe("recording settings", () => {
 		expect(file.cursor?.bounceSpeed).toBe(DEFAULT_CURSOR.bounceSpeed);
 	});
 });
+
+describe("relinking one asset by id", () => {
+	it("gives two same-named takes each their own file", () => {
+		const first = offlineAsset(toManifest(asset({ id: "a1", name: "IMG_0001.MOV" })));
+		const file = asset({
+			id: "fresh",
+			name: "IMG_0001.MOV",
+			url: "blob:b",
+			sourcePath: "/b/IMG_0001.MOV",
+		});
+		// Only a2 is being relinked: the file goes to it, not to a1.
+		const second = offlineAsset(toManifest(asset({ id: "a2", name: "IMG_0001.MOV" })));
+		const { relinked } = relinkAssets([second], [file], { pairExactly: true });
+		expect(relinked[0]).toMatchObject({
+			id: "a2",
+			url: "blob:b",
+			sourcePath: "/b/IMG_0001.MOV",
+		});
+		expect(first.offline).toBe(true);
+	});
+
+	it("forgets a stale path when relinked from a file that has none", () => {
+		const saved = offlineAsset(toManifest(asset({ sourcePath: "/old/take.mov" })));
+		const { relinked } = relinkAssets([saved], [asset({ id: "fresh", url: "blob:n" })]);
+		expect(relinked[0].sourcePath).toBeUndefined();
+	});
+});

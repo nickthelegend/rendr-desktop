@@ -9,6 +9,7 @@
 
 import type { GraphicSpec, KeepOut } from "./graphics";
 import { type ClipModel, withDefaults } from "./model";
+import { type Box, faceInFrame } from "./punchIns";
 import type { TimelineModel, TrackModel } from "./reducers";
 import type { FaceTrack } from "./vision";
 import { typicalFace } from "./vision";
@@ -39,15 +40,33 @@ export function footageUnder(
  * The region a layout should keep clear: the speaker, from their face down.
  * Falls back to a centred figure when there's no face track.
  */
-export function keepOutFromFaces(track: FaceTrack | undefined): KeepOut | undefined {
+export function keepOutFromFaces(
+	track: FaceTrack | undefined,
+	/**
+	 * How the footage sits in the frame. The face track is in the source
+	 * picture's coordinates; on a cropped or reframed clip (16:9 shown 9:16)
+	 * those aren't the frame's, so the region is mapped through the clip's box.
+	 */
+	frame?: { box: Box; pictureAspect: number; canvasAspect: number },
+): KeepOut | undefined {
 	const face = track ? typicalFace(track) : null;
 	if (!face) return undefined;
 	const top = Math.max(0, face.cy - face.size * 0.8);
+	// Half the speaker's width, in source x units (face size is in height units).
+	const halfWidth = Math.max(0.16, face.size * 1.4);
+	if (!frame) {
+		return { cx: face.cx, cy: (top + 1) / 2, rx: halfWidth, ry: (1 - top) / 2 };
+	}
+	const at = (x: number, y: number) =>
+		faceInFrame(frame.box, { x, y }, frame.pictureAspect, frame.canvasAspect);
+	const left = at(face.cx - halfWidth, face.cy).x;
+	const right = at(face.cx + halfWidth, face.cy).x;
+	const topInFrame = Math.max(0, at(face.cx, top).y);
 	return {
-		cx: face.cx,
-		cy: (top + 1) / 2,
-		rx: Math.max(0.16, face.size * 1.4),
-		ry: (1 - top) / 2,
+		cx: (left + right) / 2,
+		cy: (topInFrame + 1) / 2,
+		rx: Math.max(0.12, (right - left) / 2),
+		ry: (1 - topInFrame) / 2,
 	};
 }
 
