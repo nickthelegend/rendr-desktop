@@ -2,19 +2,29 @@
 
 <img src="public/branding/rendr-logo.svg" alt="Rendr" width="360" />
 
-**Record and edit in one app — driven by humans and agents alike.**
+**Record and edit in one app — driven by humans and agents alike. Built for creators.**
 
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-2563eb?style=for-the-badge)](LICENSE.md)
 [![MCP](https://img.shields.io/badge/MCP-108%20tools-7c3aed?style=for-the-badge)](#rendr-connect--any-agent-any-model)
 
 </div>
 
-Rendr is an open-source Electron app that captures screen video and edits it in the
-same place. Every capability is exposed twice: once as a UI a person uses, and once
-as an [MCP](https://modelcontextprotocol.io) tool an agent calls. Neither is a
-wrapper around the other — a recording an agent starts runs through exactly the
-same pipeline as one a person starts, and the preview and the exported file are
-rendered by the same functions.
+Rendr is an open-source video editor you can drive by talking to an AI agent. It
+records screen video and edits it in the same place, and it edits creators'
+camera footage: talking-head YouTube videos, Shorts, Reels and TikToks. It
+cuts pauses and retakes, punches in on your face, captions word by word,
+removes the background, draws animated mind maps behind you, reframes to 9:16,
+makes the thumbnail, and exports for each platform. **[CREATORS.md](CREATORS.md)**
+is the guide for creators.
+
+Every capability is exposed twice: once as a UI a person uses, and once as an
+[MCP](https://modelcontextprotocol.io) tool an agent calls. Neither is a wrapper
+around the other. A recording an agent starts runs through exactly the same
+pipeline as one a person starts, and the preview and the exported file are
+rendered by the same functions. Bring any agent: Claude Code, Codex, Gemini CLI,
+OpenCode, any ACP agent, an API key or a local model. You can also plug Rendr
+into the one you already use, including claude.ai and ChatGPT
+(see [Rendr Connect](#rendr-connect--any-agent-any-model)).
 
 ---
 
