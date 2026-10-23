@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { RecordingSessionData } from "./ipc/types";
 
 type NativeVideoExportWriteResult = { success: boolean; error?: string };
@@ -211,11 +211,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	analyzeFootage: async (
 		url: string,
-		request: { name: string; quality?: "fast" | "balanced" | "accurate" },
+		request: { name: string; quality?: "fast" | "balanced" | "accurate"; sourcePath?: string },
 	) => {
-		// Same handoff as transcription: the renderer owns the blob, main sees bytes.
+		// A file that's still on disk is read there by the main process — a 4K
+		// take can be gigabytes, and copying it through IPC would double that in
+		// memory. Only footage with no path (a recording, a download) is sent as bytes.
+		if (request.sourcePath) return ipcRenderer.invoke("rendr-vision:analyze", null, request);
 		const bytes = await (await fetch(url)).arrayBuffer();
 		return ipcRenderer.invoke("rendr-vision:analyze", bytes, request);
+	},
+	/** Keeps something Rendr made (a thumbnail, a still) as a real file under ~/Pictures/Rendr. */
+	saveGenerated: (bytes: ArrayBuffer, name: string) =>
+		ipcRenderer.invoke("rendr-files:save-generated", bytes, name),
+	/** Where a dropped or picked file lives on disk, when it has a path at all. */
+	pathForFile: (file: File): string | null => {
+		try {
+			return webUtils.getPathForFile(file) || null;
+		} catch {
+			return null;
+		}
 	},
 	onFootageProgress: (callback: (event: { name: string; progress: number }) => void) => {
 		const listener = (

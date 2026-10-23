@@ -249,8 +249,17 @@ interface Window {
 		onConnectChanged: (callback: (state: unknown) => void) => () => void;
 		analyzeFootage: (
 			url: string,
-			request: { name: string; quality?: "fast" | "balanced" | "accurate" },
+			request: {
+				name: string;
+				quality?: "fast" | "balanced" | "accurate";
+				sourcePath?: string;
+			},
 		) => Promise<import("../src/palmier-ui/vision").FootageAnalysis>;
+		pathForFile: (file: File) => string | null;
+		saveGenerated: (
+			bytes: ArrayBuffer,
+			name: string,
+		) => Promise<{ ok: boolean; path?: string; reason?: string }>;
 		onFootageProgress: (
 			callback: (event: { name: string; progress: number }) => void,
 		) => () => void;

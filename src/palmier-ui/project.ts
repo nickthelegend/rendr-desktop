@@ -44,6 +44,8 @@ export interface AssetManifestEntry {
 	/** Small enough to keep inline; re-analysing a long take costs minutes. */
 	faceTrack?: AssetModel["faceTrack"];
 	personCoverage?: number;
+	/** Where the file was on disk, so a reopened project can relink itself. */
+	sourcePath?: string;
 }
 
 export interface ProjectFile {
@@ -99,6 +101,7 @@ export function toManifest(asset: AssetModel): AssetManifestEntry {
 		isMatte: asset.isMatte,
 		faceTrack: asset.faceTrack,
 		personCoverage: asset.personCoverage,
+		sourcePath: asset.sourcePath,
 	};
 }
 
@@ -274,6 +277,8 @@ export function relinkAssets(
 				height: match.height,
 				hasAudio: match.hasAudio,
 				url: match.url,
+				// The file's location is the one thing a relink should update.
+				sourcePath: match.sourcePath ?? asset.sourcePath,
 				offline: false,
 			});
 		} else {

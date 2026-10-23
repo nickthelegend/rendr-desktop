@@ -63,6 +63,7 @@ import { Split, type SplitPane } from "./Split";
 import { type CaptureSource, type EditorApi, formatTimecode, useEditorState } from "./state";
 import { type FocusedPanel, Layout } from "./theme";
 import { useAgentBridge } from "./useAgentBridge";
+import { useAutoRelink } from "./useAutoRelink";
 import { useMatteRecovery } from "./useMatteRecovery";
 import { DEFAULT_WEBCAM } from "./webcam";
 import { DEFAULT_ZOOM_TIMING } from "./zoom";
@@ -213,6 +214,8 @@ export function EditorShell() {
 	useAgentBridge(api);
 	// Reopened projects get their removed backgrounds back once the footage is relinked.
 	useMatteRecovery(api);
+	// …and their media, from where the files were, when they're still there.
+	useAutoRelink(api);
 
 	const [picking, setPicking] = useState(false);
 	const [exporting, setExporting] = useState(false);

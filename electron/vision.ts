@@ -20,9 +20,29 @@ import { ensureSwiftHelperBinary, resolveUnpackedAppPath } from "./ipc/paths/bin
 
 export const VISION_CHANNEL = "rendr-vision:analyze";
 export const VISION_PROGRESS_CHANNEL = "rendr-vision:progress";
+export const SAVE_GENERATED_CHANNEL = "rendr-files:save-generated";
+
+/**
+ * Where things Rendr makes (thumbnails, stills) are kept: a folder the user
+ * can find and upload from, rather than a blob that dies with the window.
+ */
+export async function saveGenerated(bytes: ArrayBuffer, name: string): Promise<string> {
+	const safe = name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "Rendr image.png";
+	const dir = path.join(app.getPath("pictures"), "Rendr");
+	await fs.mkdir(dir, { recursive: true });
+	// Never overwrite: a second variant with the same title gets a number.
+	const ext = path.extname(safe);
+	const stem = safe.slice(0, safe.length - ext.length);
+	let candidate = path.join(dir, safe);
+	for (let n = 2; existsSync(candidate); n++) candidate = path.join(dir, `${stem} ${n}${ext}`);
+	await fs.writeFile(candidate, Buffer.from(bytes));
+	return candidate;
+}
 
 export interface VisionRequest {
 	name: string;
+	/** The footage's own file, when it has one; read in place rather than copied. */
+	sourcePath?: string;
 	matte: boolean;
 	faces: boolean;
 	quality?: "fast" | "balanced" | "accurate";
@@ -131,8 +151,20 @@ async function readCached(dir: string, request: VisionRequest): Promise<VisionRe
 	}
 }
 
+/** A content hash of a file, streamed — the file may be far bigger than memory wants. */
+async function hashFile(filePath: string): Promise<string> {
+	const { createReadStream } = await import("node:fs");
+	return await new Promise((resolve, reject) => {
+		const hash = crypto.createHash("sha256");
+		createReadStream(filePath)
+			.on("data", (chunk) => hash.update(chunk))
+			.on("error", reject)
+			.on("end", () => resolve(hash.digest("hex").slice(0, 32)));
+	});
+}
+
 export async function analyzeFootage(
-	bytes: ArrayBuffer,
+	bytes: ArrayBuffer | null,
 	request: VisionRequest,
 	onProgress: (progress: number) => void,
 ): Promise<VisionResult> {
@@ -142,15 +174,31 @@ export async function analyzeFootage(
 			reason: "Footage analysis (background removal, face tracking) uses Apple's Vision framework, so it runs on macOS only for now.",
 		};
 	}
-	const key = crypto.createHash("sha256").update(Buffer.from(bytes)).digest("hex").slice(0, 32);
+	const inPlace =
+		!bytes && request.sourcePath && existsSync(request.sourcePath) ? request.sourcePath : null;
+	if (!bytes && !inPlace) {
+		return {
+			ok: false,
+			reason: "The footage's file isn't where it was imported from. Import it again.",
+		};
+	}
+	const key = inPlace
+		? await hashFile(inPlace)
+		: crypto
+				.createHash("sha256")
+				.update(Buffer.from(bytes as ArrayBuffer))
+				.digest("hex")
+				.slice(0, 32);
 	const dir = path.join(cacheRoot(), key);
 	const cached = await readCached(dir, request);
 	if (cached) return cached;
 
 	await fs.mkdir(dir, { recursive: true });
-	const sourcePath = path.join(dir, `source${path.extname(request.name) || ".mp4"}`);
+	// Footage read in place is the user's own file: never written, never removed.
+	// Only a copy Rendr made itself is cleaned up afterwards.
+	const sourcePath = inPlace ?? path.join(dir, `source${path.extname(request.name) || ".mp4"}`);
 	try {
-		await fs.writeFile(sourcePath, Buffer.from(bytes));
+		if (!inPlace) await fs.writeFile(sourcePath, Buffer.from(bytes as ArrayBuffer));
 		const args = ["analyze", sourcePath, "--out", dir];
 		// Always produce both when either is missing: the second pass would decode
 		// the whole file again for a few kilobytes of JSON.
@@ -179,20 +227,32 @@ export async function analyzeFootage(
 		return { ok: false, key, reason: error instanceof Error ? error.message : String(error) };
 	} finally {
 		// The footage already lives in the project; only the outputs are worth keeping.
-		await fs.rm(sourcePath, { force: true });
+		if (!inPlace) await fs.rm(sourcePath, { force: true });
 	}
 }
 
 export function registerVision(getWindow: () => BrowserWindow | null): void {
+	ipcMain.handle(SAVE_GENERATED_CHANNEL, async (_event, bytes: ArrayBuffer, name: string) => {
+		try {
+			return {
+				ok: true,
+				path: await saveGenerated(bytes, String(name ?? "Rendr image.png")),
+			};
+		} catch (error) {
+			return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		}
+	});
 	ipcMain.handle(
 		VISION_CHANNEL,
-		async (_event, bytes: ArrayBuffer, request: Partial<VisionRequest>) => {
+		async (_event, bytes: ArrayBuffer | null, request: Partial<VisionRequest>) => {
 			const name = request?.name ?? "footage.mp4";
 			const job: VisionRequest = {
 				name,
 				matte: true,
 				faces: true,
 				quality: request?.quality,
+				sourcePath:
+					typeof request?.sourcePath === "string" ? request.sourcePath : undefined,
 			};
 			return analyzeFootage(bytes, job, (progress) => {
 				const window = getWindow();

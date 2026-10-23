@@ -73,7 +73,7 @@ import {
 } from "./layout";
 import { findLook, freshLookId, type LookModel, sortLooks } from "./looks";
 import { type LoudnessMeasurement, loudnessGain, measureIntegratedLoudness } from "./loudness";
-import { folderChain, formatDuration, SUPPORTED_SUMMARY } from "./media";
+import { folderChain, formatDuration, type PathedFile, SUPPORTED_SUMMARY } from "./media";
 import {
 	buildDuckPlan,
 	clipSourceWindow,
@@ -4351,6 +4351,9 @@ export function createAgentTools(api: EditorApi) {
 					const name =
 						asString(args.name) ?? path.split(/[\\/]/).pop() ?? "Imported file";
 					file = new File([new Uint8Array(read.data)], name);
+					// Remembered so analysis can read the file in place and a
+					// reopened project can relink it.
+					(file as PathedFile).rendrSourcePath = path;
 				} else if (bytes) {
 					const mimeType = asString(source.mimeType);
 					if (!mimeType)

@@ -23,7 +23,7 @@ import {
 	settleSeconds,
 } from "./graphics";
 import { type ClipBackground, parseBackground } from "./matte";
-import { type AssetModel, importFiles } from "./media";
+import { type AssetModel, importFiles, type PathedFile } from "./media";
 import type { ClipModel } from "./model";
 import { footageTrackIndex } from "./placement";
 import {
@@ -137,6 +137,7 @@ async function runAnalysis(
 	}
 	const analysis = await bridge.analyzeFootage(asset.url, {
 		name: asset.name,
+		sourcePath: asset.sourcePath,
 		quality: quality === "fast" || quality === "accurate" ? quality : undefined,
 	});
 	if (!analysis.ok || !analysis.mattePath) {
@@ -867,9 +868,14 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 			);
 			if (!blob) return fail("render_failed", "Couldn't encode the thumbnail.");
 			const name = asString(args.name) ?? `Thumbnail – ${title}`;
-			const file = new File([blob], `${name.replace(/[^\w. –-]/g, "")}.png`, {
-				type: "image/png",
-			});
+			const fileName = `${name.replace(/[^\w. –-]/g, "")}.png`;
+			const file = new File([blob], fileName, { type: "image/png" }) as PathedFile;
+			// Kept as a real file, so it survives a reopen and is easy to find for upload.
+			const saved = await window.electronAPI?.saveGenerated?.(
+				await blob.arrayBuffer(),
+				fileName,
+			);
+			if (saved?.ok && saved.path) file.rendrSourcePath = saved.path;
 			const [added] = await api.importMedia([file]);
 
 			let savedTo: string | undefined;
@@ -904,7 +910,7 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 								name: added?.name,
 								size: [spec.width, spec.height],
 								speakerFrom: Math.round(at * 100) / 100,
-								savedTo,
+								savedTo: savedTo ?? (saved?.ok ? saved.path : undefined),
 								note: "In the media library. Tweak title / highlight / background / side and call again for variants.",
 							},
 							null,

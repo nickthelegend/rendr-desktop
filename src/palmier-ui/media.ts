@@ -45,6 +45,13 @@ export interface AssetModel {
 	matteAssetId?: string;
 	/** True for such a matte, so the library hides it — it is a tool, not media. */
 	isMatte?: boolean;
+	/**
+	 * Where the file lives on disk, when it came from one (a drop, the file
+	 * picker, an import by path). Lets the main process read it in place
+	 * instead of copying gigabytes through IPC, and lets a reopened project
+	 * relink itself.
+	 */
+	sourcePath?: string;
 	/** Where the speaker's face is through the footage, for reframing and punch-ins. */
 	faceTrack?: FaceTrack;
 	/** Share of the footage with a person in shot, from the same analysis. */
@@ -222,11 +229,23 @@ export interface ImportOutcome {
  * Import files into the library. Unsupported or undecodable files are reported
  * rather than silently dropped, and never leave a half-built asset behind.
  */
+/** A File that remembers the path it was read from, for imports by path. */
+export type PathedFile = File & { rendrSourcePath?: string };
+
+/** The file's path on disk: one Rendr was given, or the one the OS dropped. */
+export function sourcePathOf(file: File): string | undefined {
+	const given = (file as PathedFile).rendrSourcePath;
+	if (given) return given;
+	const fromOs = typeof window === "undefined" ? null : window.electronAPI?.pathForFile?.(file);
+	return fromOs || undefined;
+}
+
 export async function importFiles(files: readonly File[]): Promise<ImportOutcome> {
 	const assets: AssetModel[] = [];
 	const rejected: string[] = [];
 
 	for (const file of files) {
+		const sourcePath = sourcePathOf(file);
 		const type = kindOf(file);
 		if (!type) {
 			rejected.push(`${file.name} — unsupported format`);
@@ -248,6 +267,7 @@ export async function importFiles(files: readonly File[]): Promise<ImportOutcome
 					...(fps ? { fps } : {}),
 					hasAudio: probe.hasAudio,
 					url,
+					...(sourcePath ? { sourcePath } : {}),
 				});
 			} else if (type === "audio") {
 				const probe = await probeAudio(url);
@@ -260,6 +280,7 @@ export async function importFiles(files: readonly File[]): Promise<ImportOutcome
 					height: 0,
 					hasAudio: true,
 					url,
+					...(sourcePath ? { sourcePath } : {}),
 				});
 			} else {
 				const probe = await probeImage(url);
@@ -272,6 +293,7 @@ export async function importFiles(files: readonly File[]): Promise<ImportOutcome
 					height: probe.height,
 					hasAudio: false,
 					url,
+					...(sourcePath ? { sourcePath } : {}),
 				});
 			}
 		} catch (error) {
