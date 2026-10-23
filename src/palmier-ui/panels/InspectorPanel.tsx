@@ -18,6 +18,7 @@ import {
 } from "../background";
 import { narratableComments } from "../comments";
 import { ColorField, NumberField, Segmented, Select, Slider, Switch } from "../controls";
+import { ensureAnalysis, setClipBackgrounds } from "../creatorTools";
 import {
 	CURSOR_LIMITS,
 	CURSOR_STYLES,
@@ -35,6 +36,7 @@ import {
 	parseKeyframeRows,
 	sampleTrack,
 } from "../keyframes";
+import type { ClipBackground } from "../matte";
 import { CLIP_LIMITS, type ClipModel, NEUTRAL_GRADE, type TextAnimation } from "../model";
 import { type HueTarget, LutParseError, parseCubeLut } from "../pixelGrade";
 import { getVoiceStatus, installVoice, type VoiceStatus, voiceSupported } from "../voice";
@@ -183,6 +185,134 @@ function Group({
 			</div>
 			{open ? <div className="pmr-group__body">{children}</div> : null}
 		</div>
+	);
+}
+
+/**
+ * Background removal for camera footage, by hand.
+ *
+ * The same `background` the agent's remove_background sets, and the same
+ * analysis behind it — so a person who'd rather click than ask gets the
+ * identical result, and either can undo the other's choice.
+ */
+function PersonBackgroundGroup({ api, clips }: { api: EditorApi; clips: ClipModel[] }) {
+	const first = clips[0];
+	const asset = api.state.assets.find((entry) => entry.id === first.assetId);
+	const matte = asset?.matteAssetId
+		? api.state.assets.find((entry) => entry.id === asset.matteAssetId)
+		: undefined;
+	const ready = Boolean(matte?.url && !matte.offline);
+	const [busy, setBusy] = useState<string | null>(null);
+	const ids = new Set(clips.map((clip) => clip.id));
+	const current = first.background;
+	const mode = current?.mode ?? "off";
+
+	const apply = (next: ClipBackground | undefined, label: string) =>
+		api.commit(label, (t) => setClipBackgrounds(t, ids, next));
+
+	const analyse = async () => {
+		if (!asset) return;
+		setBusy("Finding you in the footage…");
+		const result = await ensureAnalysis(api, asset, { waitMs: 15 * 60 * 1000 });
+		setBusy(null);
+		if (result.status === "done" && !result.outcome.ok) {
+			api.toast(result.outcome.reason, "error");
+			return;
+		}
+		apply({ mode: "color", color: "#0B4F3C" }, "Background: color");
+	};
+
+	if (!asset || asset.type !== "video") return null;
+	return (
+		<Group title="Background" defaultOpen={Boolean(current)}>
+			{!ready ? (
+				<Row label="Person">
+					<button
+						type="button"
+						className="pmr-action"
+						disabled={busy !== null || asset.offline}
+						title="Finds the person in this footage on your Mac (Apple Vision). Nothing is uploaded."
+						onClick={() => void analyse()}
+					>
+						{busy ?? "Remove background"}
+					</button>
+				</Row>
+			) : (
+				<>
+					<Row label="Behind you">
+						<Segmented
+							ariaLabel="Background"
+							value={mode}
+							options={[
+								{ value: "off", label: "Original" },
+								{ value: "color", label: "Colour" },
+								{ value: "blur", label: "Blur" },
+								{
+									value: "remove",
+									label: "None",
+									title: "Transparent: tracks below show through",
+								},
+							]}
+							onChange={(next) =>
+								next === "off"
+									? apply(undefined, "Restore background")
+									: apply(
+											next === "color"
+												? {
+														mode: "color",
+														color: current?.color ?? "#0B4F3C",
+														feather: current?.feather,
+													}
+												: next === "blur"
+													? {
+															mode: "blur",
+															blur: current?.blur ?? 24,
+															feather: current?.feather,
+														}
+													: { mode: "remove", feather: current?.feather },
+											`Background: ${next}`,
+										)
+							}
+						/>
+					</Row>
+					{current?.mode === "color" ? (
+						<Row label="Colour">
+							<ColorField
+								value={current.color ?? "#0B4F3C"}
+								ariaLabel="Background colour"
+								onChange={(color) =>
+									apply({ ...current, color }, "Background colour")
+								}
+							/>
+						</Row>
+					) : null}
+					{current?.mode === "blur" ? (
+						<SliderRow
+							label="Blur"
+							value={current.blur ?? 24}
+							min={0}
+							max={80}
+							step={1}
+							suffix="px"
+							onChange={(blur) => apply({ ...current, blur }, "Background blur")}
+						/>
+					) : null}
+					{current ? (
+						<SliderRow
+							label="Edge"
+							value={current.feather ?? 1.5}
+							min={0}
+							max={12}
+							step={0.5}
+							suffix="px"
+							onChange={(feather) =>
+								apply({ ...current, feather }, "Soften cut-out edge")
+							}
+						/>
+					) : null}
+				</>
+			)}
+		</Group>
 	);
 }
 
@@ -1492,6 +1622,10 @@ export function InspectorPanel({ api }: { api: EditorApi }) {
 								}
 							/>
 						</Group>
+
+						{first.mediaType === "video" ? (
+							<PersonBackgroundGroup api={api} clips={clips} />
+						) : null}
 
 						<Group title="Timing">
 							<Row label="Start">
