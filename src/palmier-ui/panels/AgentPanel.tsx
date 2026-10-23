@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PlugIcon, SendIcon, SlidersIcon, SparkleIcon } from "../icons";
 import { MCP_PORT } from "../mcpStatus";
+import { MiniMarkdown } from "../miniMarkdown";
 import { PanelHeader } from "../Panel";
 import type { EditorApi } from "../state";
 import { Status } from "../theme";
@@ -232,7 +233,13 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 									<span className="pmr-msg__role">
 										{entry.kind === "user" ? "You" : "Rendr"}
 									</span>
-									<span className="pmr-msg__body">{entry.text}</span>
+									<span className="pmr-msg__body">
+										{entry.kind === "assistant" ? (
+											<MiniMarkdown text={entry.text} />
+										) : (
+											entry.text
+										)}
+									</span>
 								</div>
 							);
 						})}
