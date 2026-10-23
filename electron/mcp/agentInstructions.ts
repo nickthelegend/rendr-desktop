@@ -65,6 +65,7 @@ Rendr edits talking-head footage as well as screen recordings.
 - remove_background: 'color' for a flat backdrop, 'blur' for portrait mode, 'remove' to let lower tracks show through. Graphics placed 'behind' (add_graphic layer 'behind', default for mind_map) sit between backdrop and speaker; the backdrop colour moves onto the graphic automatically.
 - add_graphic coordinates are frame-normalized (0–1); cards avoid the speaker's face when there is a face track, and avoid other graphics on screen — add a QR code before a mind map so the map lays out around it.
 - Prompts (slash commands) named edit_talking_head, make_short, explainer_look, clean_audio and add_key_points carry complete plans; follow them when the user asks for one of those outcomes.
+- find_retakes (after add_captions) finds abandoned takes and stutters — report first, then apply:true. create_thumbnail makes a YouTube thumbnail or Shorts cover from the footage and returns a preview; offer two or three variants.
 - Always view_frame the result at a few moments before calling an edit done — check faces aren't covered or cropped and captions are inside the frame.`;
 
 export const FULL_INSTRUCTIONS =

@@ -60,7 +60,7 @@ export const RECIPES: Recipe[] = [
 5. add_captions, then style_captions with the ${args.style === "bold" ? "bold, word-by-word Shorts look" : "clean, readable YouTube look"}.
 6. normalize_audio to -14 LUFS.${args.music ? ` Add "${args.music}" on an audio track under the whole edit at about -18 dB, then duck_audio under the speech.` : ""}
 7. view_frame at three points (start, middle, a punched-in segment) and check framing and captions with your own eyes before saying it's done.
-8. Tell me what you cut (how many seconds, how many fillers) in one or two sentences, and ask before exporting.`,
+8. Tell me what you cut (how many seconds, how many fillers and retakes) in one or two sentences, and ask before exporting — and offer to make a thumbnail (create_thumbnail).`,
 	},
 	{
 		name: "make_short",
@@ -111,6 +111,29 @@ export const RECIPES: Recipe[] = [
 ${args.link ? `4. add_graphic template 'qr' with data '${args.link}' and a short label like 'Scan me', in a top corner. Add it BEFORE the mind map so the map lays out around it.\n` : ""}${args.link ? "5" : "4"}. add_graphic template 'mind_map' with those nodes, linking related ideas. It goes BEHIND the speaker automatically, lasts as long as the footage, and the backdrop colour moves to its own track beneath it; cards are laid out around the speaker's face.
 ${args.link ? "6" : "5"}. Ideally time each card to appear when it's first mentioned: use the transcript times and pass a custom 'at' per card (template 'custom') if the default stagger doesn't match.
 ${args.link ? "7" : "6"}. view_frame after the last card lands and check nothing covers the face.`,
+	},
+	{
+		name: "thumbnail",
+		title: "Make a thumbnail",
+		description:
+			"YouTube thumbnail (or Shorts cover) from the footage: you cut out, big bold title, highlight word.",
+		arguments: [
+			MEDIA_ARG,
+			{
+				name: "title",
+				description: "3–5 punchy words. Default: write one from the transcript.",
+			},
+			{
+				name: "format",
+				description: "youtube (1280×720) or shorts (1080×1920 cover). Default youtube.",
+			},
+		],
+		build: (args) => `Make a thumbnail for ${which(args)}.
+
+1. get_media; analyze_footage on the footage if it has no matte yet.
+2. ${args.title ? `Use the title "${args.title}".` : "Read get_transcript (if there are captions) and write a 3–5 word title: curiosity or a strong claim, no full sentence."} Pick the one or two words that carry it as highlight.
+3. create_thumbnail with format '${args.format ?? "youtube"}' — then two more variants: a different background colour (bold, high-contrast against the speaker's clothes) and the speaker on the other side.
+4. Show me the three previews side by side in words (what differs) and ask which to keep.`,
 	},
 	{
 		name: "clean_audio",

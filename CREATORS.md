@@ -11,7 +11,7 @@ take an afternoon:
 
 | You say | Rendr does |
 |---|---|
-| "Tighten this up" | Cuts dead air and "um / uh / like", keeps the last take of a repeated line |
+| "Tighten this up" | Cuts dead air and "um / uh", finds retakes and stutters and keeps the last take |
 | "Punch in on the cuts" | Jump-cut zooms on alternate segments, centred on your face |
 | "Caption it" | Word-by-word captions from local Whisper; nothing is uploaded |
 | "Make it a Short" | Picks the strongest 30–60 s, reframes 9:16 on your face, captions above the app buttons |
@@ -19,6 +19,7 @@ take an afternoon:
 | "Mind map of the topics behind me" | Animated cards and lines laid out around you, between backdrop and you |
 | "QR code to my link" | A scannable QR code that pops in, in the corner you want |
 | "Make the audio sound right" | Platform loudness (−14 LUFS), denoise, music ducked under your voice |
+| "Make me a thumbnail" | You, cut out with a sticker outline, a huge bold title, a highlight word: YouTube 1280×720 or a Shorts cover |
 | "Export for TikTok" | 1080×1920 at the right bitrate, or a clear error if the edit isn't vertical yet |
 
 ## 1. Pick your agent
@@ -60,8 +61,8 @@ Some prompts that work well:
 > https://example.com in the top right.
 
 In clients that support MCP prompts, the same plans are slash commands:
-**/edit_talking_head**, **/make_short**, **/explainer_look**, **/clean_audio**,
-**/add_key_points**.
+**/edit_talking_head**, **/make_short**, **/explainer_look**, **/thumbnail**,
+**/clean_audio**, **/add_key_points**.
 
 ## Privacy
 

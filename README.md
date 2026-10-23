@@ -5,7 +5,7 @@
 **Record and edit in one app — driven by humans and agents alike.**
 
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-2563eb?style=for-the-badge)](LICENSE.md)
-[![MCP](https://img.shields.io/badge/MCP-106%20tools-7c3aed?style=for-the-badge)](#rendr-connect--any-agent-any-model)
+[![MCP](https://img.shields.io/badge/MCP-108%20tools-7c3aed?style=for-the-badge)](#rendr-connect--any-agent-any-model)
 
 </div>
 
@@ -171,14 +171,16 @@ guide. In short:
 | `analyze_footage` | On-device person matte and face track, using Apple's Vision framework. No upload and no model download. Cached per file. |
 | `remove_background` | Replaces the background with a colour, a blur, an image, or transparency, so lower tracks show through. Preview and export match. |
 | `add_graphic` | Animated mind maps, key points, lower thirds, callouts and QR codes, laid out around the speaker's face and around each other. Can go behind the speaker. |
+| `find_retakes` | Finds abandoned takes and stutters in the transcript. Proposes cutting the earlier attempts and keeping the last. |
+| `create_thumbnail` | YouTube thumbnails and Shorts covers: the cut-out speaker at their closest moment, with a sticker outline, a stroked title and highlight words. |
 | `add_punch_ins` | Jump-cut punch-ins on alternate segments that keep the face still on screen, or a slow push. Re-runnable. |
 | `reframe_timeline` | Real 9:16 / 1:1 canvases. With a face track, the crop follows the speaker. |
 | `normalize_audio` / `measure_audio` | BS.1770 integrated loudness to platform targets, with a true-peak ceiling. |
 | `duck_audio` | Ducks music under detected speech, not only under TTS narration. |
 | `export_project` presets | `youtube`, `shorts`, `reels`, `tiktok`, `square`. |
 
-Recipes (`edit_talking_head`, `make_short`, `explainer_look`, `clean_audio`,
-`add_key_points`) are served as MCP prompts, so they appear as slash commands
+Recipes (`edit_talking_head`, `make_short`, `explainer_look`, `thumbnail`,
+`clean_audio`, `add_key_points`) are served as MCP prompts, so they appear as slash commands
 in MCP clients. Each one hands the agent a complete plan in Rendr's tool
 names. They're also available at `/v1/recipes` and through `rendr recipe <name>`.
 
@@ -245,7 +247,7 @@ rendr call add_title '{"text":"Hello"}'
 RENDR_URL=https://<tunnel>/t/<token> rendr call get_timeline   # a remote Rendr
 ```
 
-### What the agent can do — 106 tools
+### What the agent can do — 108 tools
 
 Every one has a handler, is advertised over MCP, and has been run against the
 running app. None is a stub.

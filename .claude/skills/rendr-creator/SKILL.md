@@ -25,8 +25,9 @@ covers what's specific to **camera footage**.
    and face track on-device, which background removal, face-framed reframes,
    punch-ins and graphic layout all depend on. A long take may answer
    `status: "running"`. Call it again with the same assetId and the job carries on.
-3. **Cut**: `remove_silence`, then `get_transcript` + `remove_words` for fillers
-   and false starts. Keep the *last* take of a repeated sentence.
+3. **Cut**: `remove_silence`, then `add_captions` (so there's a transcript),
+   `find_retakes` (report, then `apply: true`) for abandoned takes and stutters,
+   and `remove_words` with `matches: ["um","uh"]` for fillers.
 4. **Punch in**: `add_punch_ins` *after* cutting (it works per segment).
 5. **Shape**: `reframe_timeline` to 9:16 for Shorts/Reels/TikTok. Do this
    after analysis, so the crop follows the face.
@@ -38,7 +39,8 @@ covers what's specific to **camera footage**.
 8. **Sound**: `normalize_audio` to −14 LUFS; `duck_audio` with `under: "speech"` for music.
 9. **Look at it**: `view_frame` at the start, middle and a punched-in moment.
    Check the face isn't covered or cropped and captions are inside the frame.
-10. Ask before `export_project`. Use `preset` `youtube` / `shorts` / `reels` / `tiktok` / `square`.
+10. Offer a thumbnail: `create_thumbnail` (2–3 variants).
+11. Ask before `export_project`. Use `preset` `youtube` / `shorts` / `reels` / `tiktok` / `square`.
 
 ## Recipes
 
@@ -47,6 +49,7 @@ These carry full plans. They're MCP prompts, so in Claude Code they appear as
 - `edit_talking_head`: tight YouTube edit
 - `make_short`: best 30–60 s, vertical, captioned
 - `explainer_look`: cut-out speaker over a colour, mind map behind, QR code
+- `thumbnail`: YouTube thumbnail or Shorts cover from the footage
 - `clean_audio`: denoise, loudness, ducking
 - `add_key_points`: animated key-point cards at the moments they're said
 
