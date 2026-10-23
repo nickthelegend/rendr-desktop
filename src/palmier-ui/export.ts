@@ -30,6 +30,7 @@ import {
 import { applyLuts, buildChannelLuts, type ChannelLuts } from "./curves";
 import { clipFilter } from "./effects";
 import type { FrameSource } from "./frameSource";
+import { drawGraphic } from "./graphics";
 import { clipAtFrame, clipOpacityAt } from "./keyframes";
 import { drawMatted } from "./matte";
 import type { AssetModel } from "./media";
@@ -382,6 +383,28 @@ export async function renderFrame(
 		 */
 		if (clip.captionGroupId !== undefined) {
 			context.setTransform(1, 0, 0, 1, 0, 0);
+		}
+
+		/*
+		 * Graphics are drawn in frame space too, for the same reason: a mind map
+		 * or a QR code belongs to the finished frame, and a punch-in on the
+		 * speaker should move them, not the cards around them.
+		 */
+		if (clip.mediaType === "graphic") {
+			if (clip.graphic) {
+				context.setTransform(1, 0, 0, 1, 0, 0);
+				context.globalAlpha = opacity;
+				drawGraphic(
+					context,
+					clip.graphic,
+					(frame - clip.startFrame) / timeline.fps,
+					(clip.endFrame - clip.startFrame) / timeline.fps,
+					width,
+					height,
+				);
+			}
+			context.restore();
+			continue;
 		}
 
 		context.globalAlpha = opacity;

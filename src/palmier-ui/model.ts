@@ -8,11 +8,12 @@
 import type { ZoomFocus } from "@/components/video-editor/types";
 import { type ColorBalance, hasBalance, hasCurves, type ToneCurves } from "./curves";
 import type { AppliedEffect } from "./effects";
+import type { GraphicSpec } from "./graphics";
 import type { KeyframeTracks } from "./keyframes";
 import type { ClipBackground } from "./matte";
 import { type CubeLut, type HueCurves, needsPixelGrade } from "./pixelGrade";
 
-export type MediaType = "video" | "audio" | "image" | "text" | "sequence";
+export type MediaType = "video" | "audio" | "image" | "text" | "sequence" | "graphic";
 
 export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "softLight" | "difference";
 
@@ -166,6 +167,9 @@ export interface ClipModel {
 	captionGroupId?: string;
 	/** Clip-relative word timing, so karaoke survives moving and trimming. */
 	captionWords?: Array<{ text: string; startFrame: number; endFrame: number }>;
+
+	/** Graphic clips only: the drawn elements and how they enter (graphics.ts). */
+	graphic?: GraphicSpec;
 
 	/** Screen recordings only. */
 	zoomRegions?: ZoomRegionModel[];

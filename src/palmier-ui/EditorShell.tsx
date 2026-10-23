@@ -58,6 +58,7 @@ import { Split, type SplitPane } from "./Split";
 import { type CaptureSource, type EditorApi, formatTimecode, useEditorState } from "./state";
 import { type FocusedPanel, Layout } from "./theme";
 import { useAgentBridge } from "./useAgentBridge";
+import { useMatteRecovery } from "./useMatteRecovery";
 import { DEFAULT_WEBCAM } from "./webcam";
 import { DEFAULT_ZOOM_TIMING } from "./zoom";
 
@@ -205,6 +206,8 @@ export function EditorShell() {
 
 	// Agents drive this editor through the same reducers the panels use.
 	useAgentBridge(api);
+	// Reopened projects get their removed backgrounds back once the footage is relinked.
+	useMatteRecovery(api);
 
 	const [picking, setPicking] = useState(false);
 	const [exporting, setExporting] = useState(false);

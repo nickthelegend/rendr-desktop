@@ -262,8 +262,20 @@ export function relinkAssets(
 		const match = byName.get(asset.name);
 		if (match && !used.has(match.id)) {
 			used.add(match.id);
-			// Keep the project's id so existing clips stay attached.
-			relinked.push({ ...match, id: asset.id, offline: false });
+			// The project's record wins — its id keeps clips attached, and its
+			// pairings (camera take, person matte, face track, folder) are what
+			// the edit was built on. The fresh import only contributes the file
+			// itself and what was measured from it.
+			relinked.push({
+				...asset,
+				type: match.type,
+				durationSeconds: match.durationSeconds,
+				width: match.width,
+				height: match.height,
+				hasAudio: match.hasAudio,
+				url: match.url,
+				offline: false,
+			});
 		} else {
 			relinked.push(asset);
 		}

@@ -56,6 +56,7 @@ import {
 	springCamera,
 } from "../zoom";
 import { ClipMattedCanvas } from "./ClipMattedCanvas";
+import { GraphicCanvas } from "./GraphicCanvas";
 
 const BLEND_CSS: Record<ClipModel["blendMode"], string> = {
 	normal: "normal",
@@ -746,6 +747,20 @@ export function PreviewPanel({
 									const asset = state.assets.find(
 										(entry) => entry.id === clip.assetId,
 									);
+									if (clip.mediaType === "graphic") {
+										return clip.graphic ? (
+											<GraphicCanvas
+												key={clip.id}
+												spec={clip.graphic}
+												seconds={(state.playhead - clip.startFrame) / fps}
+												clipSeconds={
+													(clip.endFrame - clip.startFrame) / fps
+												}
+												opacity={opacity}
+												camera={camera}
+											/>
+										) : null;
+									}
 									// A removed background needs the footage's matte on hand;
 									// without one the clip plays as shot, as it would export.
 									const matteAsset =

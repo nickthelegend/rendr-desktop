@@ -66,4 +66,82 @@ export const CREATOR_TOOLS: AgentTool[] = [
 			waitSeconds: WAIT_SECONDS,
 		}),
 	},
+	{
+		name: "add_graphic",
+		description:
+			"Adds an animated graphic: cards, lines, labels and QR codes drawn by Rendr (not imported images), animating in on their own. Everything is in FRAME coordinates (0–1, top-left origin) and drawn in frame space, so a punch-in on the speaker doesn't move the graphic. Preview and export match exactly.\n\nTemplates:\n• 'mind_map' — labelled cards that pop in one by one, joined by lines that draw themselves (the classic talking-head explainer look). nodes: ['Ideas', 'Storylines', …] or [{label, x, y}]; links: [[0,1], ['Ideas','Brands'], …] (default: a chain in order). Cards are laid out around the speaker, avoiding their face and body when the footage has been through analyze_footage.\n• 'key_points' — a stacked list of cards, one at a time. items: ['…'].\n• 'lower_third' — name plate. title, subtitle.\n• 'qr' — a scannable QR code. data (URL/text), corner (top_right default), label (e.g. 'Scan me').\n• 'callout' — one card, optionally with an arrow: label, x, y, pointTo [x, y].\n• 'custom' — pass elements directly: {type:'box', id, label, x, y, at}, {type:'line', from: id|[x,y], to: id|[x,y], arrow, at}, {type:'text', text, x, y, size, at}, {type:'rect', x, y, w, h, fill, at}, {type:'qr', data, x, y, size, at}. `at` is seconds after the graphic starts.\n\nlayer: 'front' (overlay on top — default for everything but mind_map) or 'behind' (on its own track directly under the speaker's footage — default for mind_map when the footage has a matte). For 'behind' to show, the footage needs remove_background; if the footage had a flat 'color' background, that colour moves onto this graphic and the footage becomes transparent, giving: colour → graphic → person. Pass clipId to restyle or re-time an existing graphic instead of adding one.",
+		inputSchema: object({
+			template: {
+				type: "string",
+				enum: ["mind_map", "key_points", "lower_third", "qr", "callout", "custom"],
+			},
+			clipId: {
+				type: "string",
+				description: "An existing graphic clip to replace in place.",
+			},
+			name: { type: "string" },
+			startFrame: {
+				type: "number",
+				description: "Timeline frame it starts at. Default 0 (or the existing clip's).",
+			},
+			durationFrames: {
+				type: "number",
+				description:
+					"Length in frames. Default: until every element has landed, plus 3 seconds to read it.",
+			},
+			layer: { type: "string", enum: ["front", "behind"] },
+			nodes: {
+				type: "array",
+				items: {},
+				description: "mind_map/key_points: labels, or {label, x, y} to pin a card.",
+			},
+			links: {
+				type: "array",
+				items: { type: "array", items: {} },
+				description: "mind_map: pairs of node indexes or labels to connect.",
+			},
+			items: {
+				type: "array",
+				items: { type: "string" },
+				description: "key_points: one card per item.",
+			},
+			title: { type: "string", description: "lower_third: the name or headline." },
+			subtitle: { type: "string", description: "lower_third: the role or detail line." },
+			data: { type: "string", description: "qr: what the code encodes — usually a URL." },
+			label: {
+				type: "string",
+				description: "qr: caption under the code. callout: the card's text.",
+			},
+			corner: {
+				type: "string",
+				enum: ["top_left", "top_right", "bottom_left", "bottom_right"],
+			},
+			x: { type: "number", description: "callout/key_points/qr: centre x, 0–1." },
+			y: { type: "number", description: "callout/qr: centre y, 0–1." },
+			pointTo: {
+				type: "array",
+				items: { type: "number" },
+				description: "callout: [x, y] the arrow points at.",
+			},
+			stagger: {
+				type: "number",
+				description: "Seconds between one card's entrance and the next. Default 0.45.",
+			},
+			elements: {
+				type: "array",
+				items: { type: "object" },
+				description: "template 'custom': the elements.",
+			},
+			background: {
+				type: "string",
+				description:
+					"A colour filling the whole frame behind the elements (e.g. '#0B4F3C').",
+			},
+			style: {
+				type: "object",
+				description:
+					"Overrides: accent (lines, default '#F5D90A'), boxFill ('#FBF3D5'), boxText ('#1F2A24'), textColor, fontFamily, fontWeight, radius (px at 1080p), lineWidth (px at 1080p), shadow (bool), uppercase (bool).",
+			},
+		}),
+	},
 ];

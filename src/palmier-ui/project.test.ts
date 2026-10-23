@@ -131,6 +131,30 @@ describe("relinking", () => {
 		expect(relinked[0].offline).toBe(false);
 	});
 
+	it("keeps the project's pairings when relinking, not the fresh import's blanks", () => {
+		// A relink used to replace the whole record with the new import, which
+		// silently dropped the camera take, the folder and the person matte.
+		const saved = asset({
+			webcamAssetId: "cam",
+			folder: "A-roll",
+			matteAssetId: "matte",
+			personCoverage: 0.8,
+			faceTrack: { width: 1, height: 1, duration: 1, interval: 1, samples: [] },
+		});
+		const offline = [offlineAsset(toManifest(saved))];
+		const { relinked } = relinkAssets(offline, [asset({ id: "fresh", url: "blob:new", width: 3840 })]);
+		expect(relinked[0]).toMatchObject({
+			id: "a1",
+			url: "blob:new",
+			width: 3840,
+			webcamAssetId: "cam",
+			folder: "A-roll",
+			matteAssetId: "matte",
+			personCoverage: 0.8,
+		});
+		expect(relinked[0].faceTrack).toBeDefined();
+	});
+
 	it("leaves an asset offline when nothing matches", () => {
 		const offline = [offlineAsset(toManifest(asset()))];
 		const { relinked, unmatched } = relinkAssets(offline, [

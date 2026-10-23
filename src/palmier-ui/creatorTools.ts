@@ -5,10 +5,27 @@
 // MCP bridge and land in the same undo history as every other edit.
 
 import type { ToolHandler, ToolResult } from "./agentTools";
+import {
+	footageUnder,
+	type GraphicLayer,
+	keepOutFromFaces,
+	placeGraphic,
+} from "./graphicPlacement";
+import {
+	buildTemplate,
+	DEFAULT_GRAPHIC_STYLE,
+	type GraphicElement,
+	type GraphicSpec,
+	type GraphicStyle,
+	graphicRegions,
+	type KeepOut,
+	settleSeconds,
+} from "./graphics";
 import { type ClipBackground, parseBackground } from "./matte";
 import { type AssetModel, importFiles } from "./media";
 import type { ClipModel } from "./model";
 import type { TimelineModel } from "./reducers";
+import { findClip } from "./reducers";
 import type { EditorApi } from "./state";
 import { compactFaceTrack, type FootageAnalysis, faceCoverage, typicalFace } from "./vision";
 
@@ -121,7 +138,7 @@ async function runAnalysis(
  * Re-analyses when the matte is missing or offline — the result is cached by
  * file in the main process, so that costs a file read, not minutes.
  */
-async function ensureAnalysis(
+export async function ensureAnalysis(
 	api: EditorApi,
 	asset: AssetModel,
 	options: { quality?: string; waitMs: number },
@@ -167,6 +184,28 @@ function waitMsFrom(args: Record<string, unknown>): number {
 	return Math.max(0, Math.min(100, seconds)) * 1000;
 }
 
+export function replaceGraphic(
+	timeline: TimelineModel,
+	clipId: string,
+	graphic: GraphicSpec,
+	startFrame: number,
+	endFrame: number,
+): TimelineModel {
+	return {
+		...timeline,
+		tracks: timeline.tracks.map((track) =>
+			track.clips.some((clip) => clip.id === clipId)
+				? {
+						...track,
+						clips: track.clips.map((clip) =>
+							clip.id === clipId ? { ...clip, graphic, startFrame, endFrame } : clip,
+						),
+					}
+				: track,
+		),
+	};
+}
+
 /** Sets (or clears) the background on the named clips. Pure; returns the same timeline when nothing changes. */
 export function setClipBackgrounds(
 	timeline: TimelineModel,
@@ -192,8 +231,103 @@ export function setClipBackgrounds(
 	return changed ? { ...timeline, tracks } : timeline;
 }
 
+const STYLE_KEYS: Array<keyof GraphicStyle> = [
+	"accent",
+	"boxFill",
+	"boxText",
+	"textColor",
+	"fontFamily",
+	"fontWeight",
+	"radius",
+	"lineWidth",
+	"shadow",
+	"uppercase",
+];
+
+/** Copies only the style keys a graphic understands, with their types checked. */
+export function parseGraphicStyle(input: unknown): Partial<GraphicStyle> {
+	if (!input || typeof input !== "object") return {};
+	const raw = input as Record<string, unknown>;
+	const out: Partial<GraphicStyle> = {};
+	for (const key of STYLE_KEYS) {
+		const value = raw[key];
+		if (value === undefined) continue;
+		if (typeof value === typeof DEFAULT_GRAPHIC_STYLE[key])
+			(out as Record<string, unknown>)[key] = value;
+	}
+	return out;
+}
+
+/** Light validation of caller-supplied elements: known types, finite coordinates. */
+export function parseElements(input: unknown): { elements: GraphicElement[] } | { error: string } {
+	if (!Array.isArray(input) || input.length === 0)
+		return { error: "elements must be a non-empty array." };
+	const types = new Set(["box", "line", "text", "rect", "qr"]);
+	for (const [index, element] of input.entries()) {
+		if (!element || typeof element !== "object")
+			return { error: `elements[${index}] isn't an object.` };
+		const record = element as Record<string, unknown>;
+		if (!types.has(String(record.type))) {
+			return { error: `elements[${index}].type must be one of box, line, text, rect, qr.` };
+		}
+		if (record.type !== "line") {
+			for (const axis of ["x", "y"]) {
+				const value = record[axis];
+				if (
+					typeof value !== "number" ||
+					!Number.isFinite(value) ||
+					value < -0.5 ||
+					value > 1.5
+				) {
+					return {
+						error: `elements[${index}].${axis} must be a number in frame coordinates (0–1).`,
+					};
+				}
+			}
+		}
+		if (record.type === "box" && typeof record.label !== "string")
+			return { error: `elements[${index}] needs a label.` };
+		if (record.type === "text" && typeof record.text !== "string")
+			return { error: `elements[${index}] needs text.` };
+		if (record.type === "qr" && typeof record.data !== "string")
+			return { error: `elements[${index}] needs data.` };
+	}
+	return { elements: input as GraphicElement[] };
+}
+
 export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> {
 	const { state, timeline, commit } = api;
+
+	/** Same contract as agentTools' mutate: compute, commit against the latest timeline, report. */
+	const mutate = (
+		label: string,
+		reduce: (t: TimelineModel) => TimelineModel,
+		receipt: () => unknown,
+	): ToolResult => {
+		const next = reduce(timeline);
+		if (next === timeline)
+			return ok({ changed: false, note: "That request left the timeline unchanged." });
+		const result = receipt();
+		commit(label, (current) => (current === timeline ? next : reduce(current)));
+		return ok(result);
+	};
+
+	/** What other graphics already occupy while this one is on screen. */
+	const otherGraphicRegions = (start: number, end: number, exceptId?: string): KeepOut[] =>
+		timeline.tracks.flatMap((track) =>
+			track.clips
+				.filter(
+					(clip) =>
+						clip.mediaType === "graphic" &&
+						clip.graphic &&
+						clip.id !== exceptId &&
+						clip.startFrame < end + timeline.fps * 30 &&
+						clip.endFrame > start,
+				)
+				.flatMap((clip) =>
+					graphicRegions(clip.graphic as GraphicSpec, timeline.width / timeline.height),
+				),
+		);
 
 	const videoClips = (): ClipModel[] =>
 		timeline.tracks.flatMap((track) =>
@@ -226,6 +360,155 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 			}
 			if (!result.outcome.ok) return fail("analysis_failed", result.outcome.reason);
 			return ok({ status: "done", ...result.outcome.summary });
+		},
+
+		add_graphic(args: Record<string, unknown>): ToolResult {
+			const template = asString(args.template) ?? (args.elements ? "custom" : null);
+			if (!template)
+				return fail(
+					"invalid_argument",
+					"Pass a template, or elements for a custom graphic.",
+				);
+
+			const fps = timeline.fps;
+			const existingId = asString(args.clipId);
+			const existing = existingId ? findClip(timeline, existingId) : null;
+			if (existingId && (!existing || existing.mediaType !== "graphic")) {
+				return fail("not_found", `No graphic clip '${existingId}' on the active timeline.`);
+			}
+
+			const start = Math.max(
+				0,
+				Math.round(
+					typeof args.startFrame === "number"
+						? args.startFrame
+						: (existing?.startFrame ?? 0),
+				),
+			);
+			// Face avoidance reads the footage the graphic will sit beside.
+			const footage = footageUnder(timeline, start, start + 1);
+			const footageAsset = footage
+				? state.assets.find((entry) => entry.id === footage.clip.assetId)
+				: undefined;
+
+			let elements: GraphicElement[];
+			if (template === "custom") {
+				const parsed = parseElements(args.elements);
+				if ("error" in parsed) return fail("invalid_argument", parsed.error);
+				elements = parsed.elements;
+			} else {
+				const built = buildTemplate({
+					template,
+					nodes: Array.isArray(args.nodes)
+						? args.nodes.map((node) =>
+								typeof node === "string"
+									? { label: node }
+									: (node as { label: string; x?: number; y?: number }),
+							)
+						: undefined,
+					links: Array.isArray(args.links)
+						? (args.links as Array<[number | string, number | string]>)
+						: undefined,
+					items: Array.isArray(args.items) ? args.items.map(String) : undefined,
+					title: asString(args.title) ?? undefined,
+					subtitle: asString(args.subtitle) ?? undefined,
+					data: asString(args.data) ?? undefined,
+					label: asString(args.label) ?? undefined,
+					corner: (asString(args.corner) ?? undefined) as "top_left" | undefined,
+					x: typeof args.x === "number" ? args.x : undefined,
+					y: typeof args.y === "number" ? args.y : undefined,
+					pointTo: Array.isArray(args.pointTo)
+						? (args.pointTo as [number, number])
+						: undefined,
+					stagger: typeof args.stagger === "number" ? args.stagger : undefined,
+					keepOut: [
+						...(keepOutFromFaces(footageAsset?.faceTrack)
+							? [keepOutFromFaces(footageAsset?.faceTrack) as KeepOut]
+							: []),
+						...otherGraphicRegions(start, start + 1, existing?.id),
+					],
+				});
+				if ("error" in built) return fail("invalid_argument", built.error);
+				elements = built.elements;
+			}
+
+			const spec: GraphicSpec = {
+				template,
+				elements,
+				style: {
+					...DEFAULT_GRAPHIC_STYLE,
+					...(existing?.graphic?.style ?? {}),
+					...parseGraphicStyle(args.style),
+				},
+				background: asString(args.background) ?? existing?.graphic?.background,
+			};
+
+			// Long enough for everything to land plus a beat to read it, unless told otherwise.
+			const settled = Math.ceil((settleSeconds(elements) + 3) * fps);
+			const durationFrames = Math.max(
+				Math.round(fps * 0.5),
+				Math.round(
+					typeof args.durationFrames === "number"
+						? args.durationFrames
+						: existing
+							? existing.endFrame - existing.startFrame
+							: settled,
+				),
+			);
+			const end = start + durationFrames;
+
+			if (existing) {
+				return mutate(
+					`Update graphic ${existing.name}`,
+					(t) => replaceGraphic(t, existing.id, spec, start, end),
+					() => ({
+						clipId: existing.id,
+						template,
+						elements: elements.length,
+						startFrame: start,
+						endFrame: end,
+					}),
+				);
+			}
+
+			const layer: GraphicLayer =
+				asString(args.layer) === "behind" || asString(args.layer) === "front"
+					? (asString(args.layer) as GraphicLayer)
+					: template === "mind_map" && footageAsset?.matteAssetId
+						? "behind"
+						: "front";
+			const id = `graphic-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+			const name = asString(args.name) ?? `${template.replace(/_/g, " ")}`;
+			let placement: ReturnType<typeof placeGraphic> | null = null;
+			return mutate(
+				`Add ${name}`,
+				(t) => {
+					placement = placeGraphic(t, {
+						id,
+						name,
+						spec,
+						startFrame: start,
+						endFrame: end,
+						layer,
+					});
+					return placement.timeline;
+				},
+				() => ({
+					clipId: id,
+					template,
+					layer,
+					elements: elements.length,
+					startFrame: start,
+					endFrame: end,
+					settlesAtFrame: start + Math.ceil(settleSeconds(elements) * fps),
+					movedBackgroundFrom: (placement as ReturnType<typeof placeGraphic> | null)
+						?.movedBackgroundFrom,
+					note:
+						layer === "behind" && !footageAsset?.matteAssetId
+							? "Placed behind the footage, but that footage still has its own background, so the graphic is hidden. Run remove_background on it (mode 'remove' or 'color')."
+							: undefined,
+				}),
+			);
 		},
 
 		async remove_background(args: Record<string, unknown>): Promise<ToolResult> {
@@ -272,6 +555,12 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 					const asset = state.assets.find((entry) => entry.id === assetId);
 					if (!asset) continue;
 					if (hasUsableMatte(asset, state.assets)) continue;
+					if (asset.offline || !asset.url) {
+						return fail(
+							"offline",
+							`'${asset.name}' is offline — import the file again to relink it, then retry. Its matte comes back on its own.`,
+						);
+					}
 					const result = await ensureAnalysis(api, asset, {
 						quality: asString(args.quality) ?? undefined,
 						waitMs: waitMsFrom(args),

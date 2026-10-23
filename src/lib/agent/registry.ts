@@ -130,6 +130,7 @@ export const DECLARED_TOOLS = [
 	// Creator tools (camera footage): see electron/mcp/creatorToolDefinitions.ts
 	"analyze_footage",
 	"remove_background",
+	"add_graphic",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */
