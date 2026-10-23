@@ -211,7 +211,8 @@ export function boxRect(
 	width: number,
 	height: number,
 ): Rect {
-	const unit = height / 1080;
+	// Sizes are authored at 1080 on the short edge, so a vertical Short keeps them.
+	const unit = Math.min(width, height) / 1080;
 	const size = (box.size ?? 34) * unit;
 	context.font = font(style, size);
 	const label = style.uppercase ? box.label.toUpperCase() : box.label;
@@ -234,7 +235,8 @@ export function drawGraphic(
 	height: number,
 ): void {
 	const style = { ...DEFAULT_GRAPHIC_STYLE, ...spec.style };
-	const unit = height / 1080;
+	// Sizes are authored at 1080 on the short edge, so a vertical Short keeps them.
+	const unit = Math.min(width, height) / 1080;
 	const fade = exitAlpha(seconds, clipSeconds);
 	if (fade <= 0) return;
 

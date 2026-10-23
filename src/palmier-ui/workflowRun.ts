@@ -231,7 +231,11 @@ export function reframeTimeline(
 				: {
 						...track,
 						clips: track.clips.map((clip) =>
-							clip.mediaType === "text" || clip.mediaType === "audio"
+							// Graphics are drawn in frame coordinates, so they follow
+							// the new canvas on their own; refitting would distort them.
+							clip.mediaType === "text" ||
+							clip.mediaType === "audio" ||
+							clip.mediaType === "graphic"
 								? clip
 								: refit(clip),
 						),

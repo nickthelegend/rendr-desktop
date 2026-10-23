@@ -136,6 +136,24 @@ describe("footageTrackIndex", () => {
 		expect(footageTrackIndex(timeline)).toBe(1);
 	});
 
+	it("skips a graphics track sitting behind the speaker", () => {
+		const map = withDefaults({
+			id: "map",
+			name: "mind map",
+			mediaType: "graphic",
+			startFrame: 0,
+			endFrame: 90,
+		});
+		const timeline = empty({
+			tracks: [
+				track({ clips: [take] }),
+				track({ id: "trk-graphic-map", name: "Graphics (behind)", clips: [map] }),
+				track({ id: "a1", name: "A1", kind: "audio" }),
+			],
+		});
+		expect(footageTrackIndex(timeline)).toBe(0);
+	});
+
 	it("skips an empty caption or title track by its id", () => {
 		const timeline = empty({
 			tracks: [

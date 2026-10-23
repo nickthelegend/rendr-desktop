@@ -73,9 +73,21 @@ export function adoptFootageFormat(timeline: TimelineModel, asset: AssetModel): 
  */
 export function isOverlayTrack(track: TrackModel): boolean {
 	if (track.kind !== "video") return false;
-	if (track.id.startsWith("trk-cc-") || track.id.startsWith("trk-text-")) return true;
+	if (
+		track.id.startsWith("trk-cc-") ||
+		track.id.startsWith("trk-text-") ||
+		track.id.startsWith("trk-graphic-")
+	) {
+		return true;
+	}
 	if (track.clips.some((clip) => clip.captionGroupId)) return true;
-	return track.clips.length > 0 && track.clips.every((clip) => clip.mediaType === "text");
+	// Drawn graphics too: a mind map placed behind the speaker sits *below* the
+	// footage, so without this it would be taken for the main footage track
+	// and a dropped clip would clear the cards out of its way.
+	return (
+		track.clips.length > 0 &&
+		track.clips.every((clip) => clip.mediaType === "text" || clip.mediaType === "graphic")
+	);
 }
 
 /**
