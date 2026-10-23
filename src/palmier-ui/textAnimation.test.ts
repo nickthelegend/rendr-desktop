@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type ClipModel, withDefaults } from "./model";
-import { isPerWord, resolveTextAnimation, wordColor } from "./textAnimation";
+import { isPerWord, resolveTextAnimation, wordColor, wordPaint } from "./textAnimation";
 
 function textClip(over: Partial<ClipModel> = {}): ClipModel {
 	return withDefaults({
@@ -122,5 +122,51 @@ describe("isPerWord", () => {
 		expect(isPerWord("word_by_word")).toBe(true);
 		expect(isPerWord("fade")).toBe(false);
 		expect(isPerWord("off")).toBe(false);
+	});
+});
+
+describe("bounce", () => {
+	it("drops in from above and comes to rest", () => {
+		const clip = withPreset("bounce");
+		const start = resolveTextAnimation(clip, 100, 30);
+		expect(start.offsetY).toBeLessThan(0);
+		expect(start.opacity).toBe(0);
+		const settled = resolveTextAnimation(clip, 160, 30);
+		expect(settled.opacity).toBe(1);
+		expect(settled.offsetY).toBeCloseTo(0, 5);
+	});
+});
+
+describe("wordPaint", () => {
+	const word = { text: "hi", progress: 1, active: true, revealed: true };
+
+	it("pops and boxes only the spoken word", () => {
+		const style = { activeWordScale: 1.15, activeWordBackground: "#7C3AED" };
+		expect(wordPaint("karaoke", word, style)).toMatchObject({
+			scale: 1.15,
+			background: "#7C3AED",
+		});
+		expect(wordPaint("karaoke", { ...word, active: false }, style)).toMatchObject({
+			scale: 1,
+			background: null,
+		});
+	});
+
+	it("overshoots on the way in, which is what reads as a pop", () => {
+		const mid = wordPaint("karaoke", { ...word, progress: 0.6 }, { activeWordScale: 1.15 });
+		expect(mid.scale).toBeGreaterThan(1.15);
+	});
+
+	it("keeps spoken words in spokenColor and honours upcomingOpacity", () => {
+		const style = { color: "#FFFFFF", spokenColor: "#22C55E", upcomingOpacity: 1 };
+		expect(wordPaint("karaoke", { ...word, active: false }, style).color).toBe("#22C55E");
+		expect(
+			wordPaint("karaoke", { ...word, active: false, revealed: false }, style),
+		).toMatchObject({ color: "#FFFFFF", opacity: 1 });
+	});
+
+	it("matches wordColor when no active-word treatment is set", () => {
+		const plain = wordPaint("karaoke", word, { color: "#fff", highlightColor: "#f90" });
+		expect(plain).toEqual({ color: "#f90", opacity: 1, scale: 1, background: null });
 	});
 });

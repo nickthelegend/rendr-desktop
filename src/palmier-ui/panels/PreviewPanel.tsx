@@ -44,7 +44,6 @@ import { PanelHeader } from "../Panel";
 import { applyPixelGrade, needsPixelGrade, type PixelGrade } from "../pixelGrade";
 import { updateZoomRegion } from "../reducers";
 import { type EditorApi, formatTimecode, frameToClipSourceMs, PLAYBACK_RATE } from "../state";
-import { isPerWord, resolveTextAnimation, wordColor } from "../textAnimation";
 import { DEFAULT_WEBCAM, type WebcamBox, webcamBox } from "../webcam";
 import {
 	type CameraState,
@@ -57,6 +56,7 @@ import {
 } from "../zoom";
 import { ClipMattedCanvas } from "./ClipMattedCanvas";
 import { GraphicCanvas } from "./GraphicCanvas";
+import { TextClipCanvas } from "./TextClipCanvas";
 
 const BLEND_CSS: Record<ClipModel["blendMode"], string> = {
 	normal: "normal",
@@ -652,6 +652,15 @@ export function PreviewPanel({
 		return null;
 	})();
 
+	// Bottom track paints first, matching the stack above and the encoder.
+	const captionItems = [...visible]
+		.reverse()
+		.filter((clip) => clip.mediaType === "text" && clip.captionGroupId !== undefined)
+		.map((raw) => ({
+			clip: clipAtFrame(raw, state.playhead),
+			opacity: clipOpacityAt(raw, state.playhead),
+		}));
+
 	const empty = totalFrames === 0;
 
 	return (
@@ -761,6 +770,21 @@ export function PreviewPanel({
 											/>
 										) : null;
 									}
+									if (clip.mediaType === "text") {
+										// Captions are painted in frame space by the
+										// overlay below, as the export draws them; any
+										// other text sits in the stack under the camera.
+										return clip.captionGroupId !== undefined ? null : (
+											<TextClipCanvas
+												key={clip.id}
+												items={[{ clip, opacity }]}
+												frame={state.playhead}
+												fps={fps}
+												timelineHeight={timeline.height}
+												sharpness={camera.scale}
+											/>
+										);
+									}
 									// A removed background needs the footage's matte on hand;
 									// without one the clip plays as shot, as it would export.
 									const matteAsset =
@@ -804,111 +828,7 @@ export function PreviewPanel({
 													clipPath: `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`,
 												}}
 											>
-												{clip.mediaType === "text" ? (
-													(() => {
-														// One resolver drives the preview and the encoder, so
-														// what plays is what exports.
-														const anim = resolveTextAnimation(
-															clip,
-															state.playhead,
-															fps,
-														);
-														const style = clip.textStyle;
-														const preset = style?.animation ?? "off";
-														const size =
-															stage.height > 0
-																? ((style?.fontSize ?? 48) /
-																		timeline.height) *
-																	stage.height
-																: 0;
-														return (
-															<div
-																style={{
-																	position: "absolute",
-																	inset: 0,
-																	display: "flex",
-																	alignItems: "center",
-																	justifyContent:
-																		style?.alignment === "left"
-																			? "flex-start"
-																			: style?.alignment ===
-																					"right"
-																				? "flex-end"
-																				: "center",
-																	padding: "0 4%",
-																	textAlign:
-																		style?.alignment ??
-																		"center",
-																	whiteSpace: "pre-wrap",
-																	fontFamily: style?.fontFamily,
-																	fontSize: size,
-																	fontWeight: style?.bold
-																		? 700
-																		: 400,
-																	fontStyle: style?.italic
-																		? "italic"
-																		: "normal",
-																	letterSpacing:
-																		stage.height > 0
-																			? ((style?.tracking ??
-																					0) /
-																					timeline.height) *
-																				stage.height
-																			: 0,
-																	textTransform: style?.uppercase
-																		? "uppercase"
-																		: "none",
-																	color: style?.color,
-																	lineHeight: 1.15,
-																	opacity: anim.opacity,
-																	transform: `translateY(${anim.offsetY * 100}%) scale(${anim.scale})`,
-																}}
-															>
-																{isPerWord(preset) &&
-																anim.words.length > 0 ? (
-																	<span
-																		style={{
-																			display: "inline",
-																		}}
-																	>
-																		{anim.words.map(
-																			(word, index) => {
-																				const paint =
-																					wordColor(
-																						preset,
-																						word,
-																						style?.color ??
-																							"#fff",
-																						style?.highlightColor ??
-																							"#F29933",
-																					);
-																				return (
-																					<span
-																						key={`${word.text}-${index}`}
-																						style={{
-																							color: paint.color,
-																							opacity:
-																								paint.opacity,
-																							transition:
-																								"color 0.08s linear",
-																						}}
-																					>
-																						{
-																							word.text
-																						}{" "}
-																					</span>
-																				);
-																			},
-																		)}
-																	</span>
-																) : (
-																	(anim.visibleText ??
-																	clip.content)
-																)}
-															</div>
-														);
-													})()
-												) : asset && matteAsset && clip.background ? (
+												{asset && matteAsset && clip.background ? (
 													<ClipMattedCanvas
 														url={asset.url}
 														matteUrl={matteAsset.url}
@@ -981,6 +901,18 @@ export function PreviewPanel({
 								})}
 							</div>
 						</div>
+
+						{/* Captions, in frame space: outside the zoom camera and the
+						    backdrop inset, exactly as renderFrame draws them, so a
+						    punch-in never pushes a subtitle off the bottom edge. */}
+						{captionItems.length > 0 ? (
+							<TextClipCanvas
+								items={captionItems}
+								frame={state.playhead}
+								fps={fps}
+								timelineHeight={timeline.height}
+							/>
+						) : null}
 
 						{/* The camera inset, composited over the capture. It sits
 						    outside the zoom transform: a presenter shouldn't slide

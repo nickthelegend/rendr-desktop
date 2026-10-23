@@ -1678,6 +1678,9 @@ export function useEditorState() {
 							? clipSourceMsToFrame(host, sourceMs, current.fps)
 							: (sourceMs / 1000) * current.fps,
 					style: placement.style as never,
+					// Supplied subtitles arrive as whole lines, so the word cap is
+					// applied here too, not only when a transcript is grouped.
+					wordsPerCaption: placement.maxWords ?? undefined,
 					// A transform's centreY is where the caption sits; the rest of
 					// the box is applied after placement, once the clips exist.
 					centerY:
