@@ -21,10 +21,18 @@ const STATUS_COLOR: Record<string, string> = {
 	pending: Status.warning,
 };
 
-const SUGGESTIONS = [
+const SCREEN_SUGGESTIONS = [
 	"Record my screen, then punch in wherever I click",
 	"Tighten the pacing and drop the filler words",
 	"Add a title card and warm the grade",
+];
+
+/** What a creator with camera footage usually wants first. */
+const CREATOR_SUGGESTIONS = [
+	"Edit this talking head: cut pauses, retakes and ums, punch in on the cuts, caption it",
+	"Make a 45-second Short from the best part, with bold captions",
+	"Put me on a green background with a mind map of the topics behind me",
+	"Make me a YouTube thumbnail",
 ];
 
 export function AgentPanel({ api }: { api: EditorApi }) {
@@ -32,6 +40,12 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 	const agent = useAgent(api);
 	const { status, thinking, send: askAgent, cancel } = agent;
 	const agentName = status.label ?? "Agent";
+	// Footage that isn't one of Rendr's own screen recordings is, in practice,
+	// camera footage — and wants creator suggestions, not recording ones.
+	const hasCameraFootage = state.assets.some(
+		(asset) =>
+			asset.type === "video" && !asset.fromRecording && !asset.isMatte && !asset.isWebcam,
+	);
 	const [draft, setDraft] = useState("");
 	const [connectTab, setConnectTab] = useState<ConnectTab | null>(null);
 	const logRef = useRef<HTMLDivElement>(null);
@@ -194,16 +208,18 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 								marginTop: 4,
 							}}
 						>
-							{SUGGESTIONS.map((suggestion) => (
-								<button
-									key={suggestion}
-									type="button"
-									className="pmr-suggestion"
-									onClick={() => send(suggestion)}
-								>
-									{suggestion}
-								</button>
-							))}
+							{(hasCameraFootage ? CREATOR_SUGGESTIONS : SCREEN_SUGGESTIONS).map(
+								(suggestion) => (
+									<button
+										key={suggestion}
+										type="button"
+										className="pmr-suggestion"
+										onClick={() => send(suggestion)}
+									>
+										{suggestion}
+									</button>
+								),
+							)}
 						</div>
 					</div>
 				) : (
