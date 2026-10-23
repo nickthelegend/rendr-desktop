@@ -33,6 +33,7 @@ import {
 	isFiller,
 	parseSubtitles,
 	placeCaptions,
+	rechunkCaptionGroup,
 	removeCaptionGroup,
 	toSrt,
 	toVtt,
@@ -146,6 +147,7 @@ import {
 	worthCorrecting,
 } from "./scopes";
 import { type CaptureSource, clipSourceMsToFrame, type EditorApi, formatTimecode } from "./state";
+import { ignoredStyleReceipt, parseTextStyle, type TextStylePatch } from "./textStyle";
 import {
 	DEFAULT_VOICE,
 	getVoiceStatus,
@@ -374,30 +376,132 @@ const neutralGrade = (): ClipModel["color"] => ({
  * an imported SRT may not have them, and the renderer falls back to animating
  * the whole line rather than showing nothing.
  */
-const CAPTION_PRESETS: Record<string, Record<string, unknown>> = {
+const CAPTION_LOOK_RESET: TextStylePatch = {
+	// Every field a preset may set, cleared, so a preset is a whole look: going
+	// from 'bold_pop' to 'subtle' must drop the outline and the pop, not leave
+	// them on underneath a look that never asked for them.
+	fontWeight: undefined,
+	uppercase: false,
+	tracking: 0,
+	strokeColor: undefined,
+	strokeWidth: undefined,
+	shadowColor: undefined,
+	shadowBlur: undefined,
+	shadowOffsetX: undefined,
+	shadowOffsetY: undefined,
+	activeWordScale: undefined,
+	activeWordBackground: undefined,
+	spokenColor: undefined,
+	upcomingOpacity: undefined,
+	backgroundColor: undefined,
+	backgroundOpacity: undefined,
+	backgroundPadding: undefined,
+	backgroundRadius: undefined,
+};
+
+const CAPTION_PRESETS: Record<string, TextStylePatch> = {
 	// Each word lights as it is said. The default, because it is the one that
 	// makes a caption readable as speech rather than as a wall of text.
-	karaoke: { animation: "karaoke", highlightColor: "#FFE14D", bold: true },
+	karaoke: { ...CAPTION_LOOK_RESET, animation: "karaoke", highlightColor: "#FFE14D", bold: true },
 	// The short-form look: heavy, tight, one word hot at a time.
 	shorts: {
+		...CAPTION_LOOK_RESET,
 		animation: "karaoke",
 		highlightColor: "#FFE14D",
 		bold: true,
 		uppercase: true,
 		fontSize: 64,
 		tracking: 2,
+		strokeColor: "#000000",
+		strokeWidth: 4,
+	},
+	// The Hormozi look: heavy white capitals with a black outline, every word
+	// at full strength, and the spoken one popping in yellow. The outline and
+	// shadow are what let it sit on any footage without a plate.
+	bold_pop: {
+		...CAPTION_LOOK_RESET,
+		animation: "karaoke",
+		color: "#FFFFFF",
+		highlightColor: "#FFE14D",
+		bold: true,
+		fontWeight: 900,
+		uppercase: true,
+		fontSize: 88,
+		tracking: 1,
+		strokeColor: "#000000",
+		strokeWidth: 7,
+		shadowColor: "#000000A6",
+		shadowBlur: 10,
+		shadowOffsetY: 4,
+		activeWordScale: 1.15,
+		upcomingOpacity: 1,
+	},
+	// The spoken word sits on a coloured rounded box. Reads at a glance even
+	// with the sound off, which is how most short-form video is first watched.
+	highlight_box: {
+		...CAPTION_LOOK_RESET,
+		animation: "karaoke",
+		color: "#FFFFFF",
+		highlightColor: "#FFFFFF",
+		bold: true,
+		fontWeight: 900,
+		uppercase: true,
+		fontSize: 84,
+		strokeColor: "#000000",
+		strokeWidth: 4,
+		activeWordBackground: "#7C3AED",
+		activeWordScale: 1.06,
+		upcomingOpacity: 1,
+	},
+	// Clean and low-key, for talking heads and explainers: mixed case, a
+	// readable weight, a soft shadow, and the line brightening as it is said.
+	subtle: {
+		...CAPTION_LOOK_RESET,
+		animation: "karaoke",
+		color: "#FFFFFF",
+		highlightColor: "#FFFFFF",
+		bold: true,
+		fontWeight: 600,
+		fontSize: 52,
+		shadowColor: "#00000099",
+		shadowBlur: 12,
+		shadowOffsetY: 2,
+		upcomingOpacity: 0.6,
+	},
+	// The line fills in a second colour as it is spoken and stays filled, so
+	// the eye can see how far through the sentence the speaker is.
+	two_tone: {
+		...CAPTION_LOOK_RESET,
+		animation: "karaoke",
+		color: "#FFFFFF",
+		highlightColor: "#FFE14D",
+		spokenColor: "#FFE14D",
+		bold: true,
+		fontWeight: 900,
+		uppercase: true,
+		fontSize: 84,
+		strokeColor: "#000000",
+		strokeWidth: 6,
+		activeWordScale: 1.08,
+		upcomingOpacity: 1,
 	},
 	// Words scale in on their own beat. Livelier than karaoke, busier too.
-	pop: { animation: "pop", bold: true, highlightColor: "#FFFFFF" },
-	typewriter: { animation: "typewriter", bold: false },
+	pop: { ...CAPTION_LOOK_RESET, animation: "pop", bold: true, highlightColor: "#FFFFFF" },
+	typewriter: { ...CAPTION_LOOK_RESET, animation: "typewriter", bold: false },
 	// Quiet: the line fades in whole and stays out of the way.
-	clean: { animation: "fade", bold: false, uppercase: false, highlightColor: "#FFFFFF" },
+	clean: { ...CAPTION_LOOK_RESET, animation: "fade", bold: false, highlightColor: "#FFFFFF" },
 	// The line sits still and only the colour moves, which reads calmer than
 	// karaoke on dense footage where motion competes with the picture.
-	emphasis: { animation: "word_by_word", highlightColor: "#7CD4FD", bold: true },
+	emphasis: {
+		...CAPTION_LOOK_RESET,
+		animation: "word_by_word",
+		highlightColor: "#7CD4FD",
+		bold: true,
+	},
 	// The safe one. A scrim behind the text means the caption does not depend
 	// on the footage being a brightness that suits it.
 	plate: {
+		...CAPTION_LOOK_RESET,
 		animation: "karaoke",
 		highlightColor: "#FFE14D",
 		color: "#FFFFFF",
@@ -435,8 +539,11 @@ const TITLE_PRESETS: Record<
 	lowerThird: {
 		main: { fontSize: 52, bold: true, alignment: "left" },
 		sub: { fontSize: 32, bold: false, alignment: "left" },
-		place: { centerX: 0.28, centerY: 0.78 },
-		subPlace: { centerX: 0.28, centerY: 0.86 },
+		// A box of its own width, not the full-frame default: left-aligned text
+		// starts at the box's left edge, and a full-width box centred at 0.28
+		// puts that edge a fifth of the frame off the left side.
+		place: { centerX: 0.28, centerY: 0.78, width: 0.48, height: 0.1 },
+		subPlace: { centerX: 0.28, centerY: 0.86, width: 0.48, height: 0.08 },
 	},
 	endCard: {
 		main: { fontSize: 84, bold: true, alignment: "center" },
@@ -496,8 +603,51 @@ function sceneDistance(gap: ReturnType<typeof compareScopes>): number {
 	);
 }
 
-/** Everything TextStyle.animation accepts, for validating an agent's string. */
-const TEXT_ANIMATIONS = ["off", "fade", "slide_up", "pop", "typewriter", "word_by_word", "karaoke"];
+/**
+ * The text-box fields of a transform an agent passed, and the keys it could
+ * not use. Flips and anything else stay out: a text box has no business being
+ * mirrored by a typo.
+ */
+function parseTextTransform(input: unknown): {
+	patch: Partial<Record<"centerX" | "centerY" | "width" | "height" | "rotation", number>>;
+	ignored: string[];
+} {
+	const patch: Partial<Record<"centerX" | "centerY" | "width" | "height" | "rotation", number>> =
+		{};
+	const ignored: string[] = [];
+	if (!input || typeof input !== "object" || Array.isArray(input)) return { patch, ignored };
+	for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+		if (
+			(key === "centerX" ||
+				key === "centerY" ||
+				key === "width" ||
+				key === "height" ||
+				key === "rotation") &&
+			typeof value === "number" &&
+			Number.isFinite(value)
+		) {
+			patch[key] = value;
+		} else {
+			ignored.push(`transform.${key}`);
+		}
+	}
+	return { patch, ignored };
+}
+
+/**
+ * An agent's style argument, with the top-level `animation` and
+ * `highlightColor` folded in — the tools accept them at either level and mean
+ * the same thing — parsed through the one style parser.
+ */
+function textStyleArgs(args: Record<string, unknown>) {
+	const raw = args.style;
+	if (raw !== undefined && raw !== null && (typeof raw !== "object" || Array.isArray(raw)))
+		return { patch: {}, ignored: [], errors: ["style must be an object."] };
+	const input: Record<string, unknown> = raw ? { ...(raw as Record<string, unknown>) } : {};
+	if (args.animation !== undefined) input.animation = args.animation;
+	if (args.highlightColor !== undefined) input.highlightColor = args.highlightColor;
+	return parseTextStyle(input);
+}
 
 /** `clipIds`-style arguments, filtered to the strings that are actually there. */
 const stringList = (value: unknown): string[] =>
@@ -1194,33 +1344,167 @@ export function createAgentTools(api: EditorApi) {
 			const entries = asArray(args.entries);
 			if (entries.length === 0)
 				return fail("invalid_argument", "entries must be a non-empty array.");
-			const ids: string[] = [];
+			const placed = entries.filter(
+				(raw) =>
+					raw &&
+					typeof raw === "object" &&
+					(raw as Record<string, unknown>).trackIndex !== undefined,
+			).length;
+			// Half the entries on named tracks and half wherever is free has no
+			// one right reading, so it is refused rather than guessed at.
+			if (placed > 0 && placed < entries.length)
+				return fail(
+					"invalid_argument",
+					"Set trackIndex on every entry, or on none of them to stack the text on new top tracks.",
+				);
+
+			const stamp = Date.now();
+			const ignored: string[] = [];
+			const prepared: Array<{
+				id: string;
+				content: string;
+				startFrame: number;
+				endFrame: number;
+				trackIndex: number | null;
+				style: TextStylePatch;
+				transform: ReturnType<typeof parseTextTransform>["patch"];
+			}> = [];
+			for (const [index, raw] of entries.entries()) {
+				if (!raw || typeof raw !== "object" || Array.isArray(raw))
+					return fail("invalid_argument", `entries[${index}] must be an object.`);
+				const entry = raw as Record<string, unknown>;
+				if (asString(entry.fillMode) === "footage")
+					return fail(
+						"not_supported",
+						"Rendr draws text in one colour; it can't stencil the layers below through the letters. Set style.color instead.",
+					);
+				const style = textStyleArgs(entry);
+				if (style.errors.length > 0)
+					return fail("invalid_argument", `entries[${index}]: ${style.errors.join(" ")}`);
+				const transform = parseTextTransform(entry.transform);
+				ignored.push(
+					...style.ignored.map((key) => `entries[${index}].style.${key}`),
+					...transform.ignored.map((key) => `entries[${index}].${key}`),
+				);
+				const startFrame = Math.max(0, Math.round(asNumber(entry.startFrame) ?? 0));
+				const endFrame = Math.round(
+					asNumber(entry.endFrame) ?? startFrame + timeline.fps * 3,
+				);
+				const trackIndex = asNumber(entry.trackIndex);
+				if (trackIndex !== null) {
+					const track = timeline.tracks[Math.round(trackIndex)];
+					if (!track) return fail("unknown_track", `No track at index ${trackIndex}.`);
+					if (track.kind !== "video")
+						return fail(
+							"invalid_argument",
+							`Track ${trackIndex} ('${track.name}') is an audio track; text needs a video track.`,
+						);
+				}
+				prepared.push({
+					id: `text-agent-${stamp}-${index}`,
+					content: asString(entry.content) ?? "Text",
+					startFrame,
+					endFrame: Math.max(startFrame + 2, endFrame),
+					trackIndex: trackIndex === null ? null : Math.round(trackIndex),
+					style: style.patch,
+					transform: transform.patch,
+				});
+			}
+
+			// A named track must have room: dropping a title onto footage would
+			// either overwrite the shot or silently land somewhere else.
+			const overlaps = (a: { startFrame: number; endFrame: number }, b: typeof a) =>
+				a.startFrame < b.endFrame && b.startFrame < a.endFrame;
+			for (const [index, entry] of prepared.entries()) {
+				if (entry.trackIndex === null) continue;
+				const track = timeline.tracks[entry.trackIndex];
+				const clash =
+					track.clips.find((clip) => overlaps(clip, entry)) ??
+					prepared
+						.slice(0, index)
+						.find(
+							(other) =>
+								other.trackIndex === entry.trackIndex && overlaps(other, entry),
+						);
+				if (clash)
+					return fail(
+						"overlap",
+						`entries[${index}] [${entry.startFrame}, ${entry.endFrame}) overlaps '${"name" in clash ? clash.name : clash.content}' on track ${entry.trackIndex}. Pick a free span or omit trackIndex on every entry.`,
+					);
+			}
+
 			return mutate(
 				"Add text",
 				(t) => {
-					let next = t;
-					entries.forEach((raw, index) => {
-						const entry = raw as Record<string, unknown>;
-						const content = asString(entry.content) ?? "Text";
-						const startFrame = asNumber(entry.startFrame) ?? 0;
-						const endFrame = asNumber(entry.endFrame) ?? startFrame + next.fps * 3;
-						const id = `text-agent-${Date.now()}-${index}`;
-						ids.push(id);
-						next = addTextClip(
-							next,
-							startFrame,
-							Math.max(2, Math.round(endFrame - startFrame)),
-							id,
-							content,
-						).timeline;
-					});
+					const made = prepared.map((entry) =>
+						withDefaults({
+							id: entry.id,
+							name: entry.content,
+							mediaType: "text",
+							startFrame: entry.startFrame,
+							endFrame: entry.endFrame,
+							content: entry.content,
+						}),
+					);
+					let next: TimelineModel;
+					if (placed > 0) {
+						next = {
+							...t,
+							tracks: t.tracks.map((track, index) => {
+								const mine = made.filter(
+									(_, entryIndex) => prepared[entryIndex].trackIndex === index,
+								);
+								return mine.length === 0
+									? track
+									: {
+											...track,
+											clips: [...track.clips, ...mine].sort(
+												(a, b) => a.startFrame - b.startFrame,
+											),
+										};
+							}),
+						};
+					} else {
+						// One new top track, and another above it only where two
+						// entries overlap — so text is always above the picture,
+						// never dropped into a free gap on a track under the footage.
+						const lanes: ClipModel[][] = [];
+						for (const clip of made) {
+							const lane = lanes.find((existing) =>
+								existing.every((other) => !overlaps(other, clip)),
+							);
+							if (lane) lane.push(clip);
+							else lanes.push([clip]);
+						}
+						next = {
+							...t,
+							tracks: [
+								...lanes.reverse().map((clips, index) => ({
+									id: `trk-text-${clips[0].id}`,
+									name: `T${lanes.length - index}`,
+									kind: "video" as const,
+									muted: false,
+									hidden: false,
+									clips: clips.sort((a, b) => a.startFrame - b.startFrame),
+								})),
+								...t.tracks,
+							],
+						};
+					}
+					for (const entry of prepared) {
+						if (Object.keys(entry.style).length > 0)
+							next = setClipTextStyle(next, [entry.id], entry.style);
+						if (Object.keys(entry.transform).length > 0)
+							next = setClipTransform(next, [entry.id], entry.transform);
+					}
 					return next;
 				},
 				(next) => ({
-					clips: ids.map((id) => {
+					clips: prepared.map(({ id }) => {
 						const clip = findClip(next, id);
 						return clip ? describeClip(clip, next.fps) : { id, missing: true };
 					}),
+					...ignoredStyleReceipt(ignored),
 				}),
 			);
 		},
@@ -1251,24 +1535,22 @@ export function createAgentTools(api: EditorApi) {
 			}
 
 			const content = asString(args.content);
-			const style = { ...((args.style ?? {}) as Record<string, unknown>) };
-			// Animation and highlight colour live on the text style, so an agent
-			// can pass them at either level and mean the same thing.
-			const animation = asString(args.animation);
-			if (animation) style.animation = animation;
-			const highlightColor = asString(args.highlightColor);
-			if (highlightColor) style.highlightColor = highlightColor;
+			// Parsed, never spread: a raw spread stored every key an agent sent,
+			// including ones the renderer has no idea about, and reported success.
+			const style = textStyleArgs(args);
+			if (style.errors.length > 0) return fail("invalid_argument", style.errors.join(" "));
+			const transform = parseTextTransform(args.transform);
+			const ignored = [...style.ignored.map((key) => `style.${key}`), ...transform.ignored];
 
 			return mutate(
 				"Update text",
 				(t) => {
 					let next = t;
 					if (content !== null) next = setClipContent(next, clipIds, content);
-					if (Object.keys(style).length > 0)
-						next = setClipTextStyle(next, clipIds, style as never);
-					if (args.transform && typeof args.transform === "object") {
-						next = setClipTransform(next, clipIds, args.transform as never);
-					}
+					if (Object.keys(style.patch).length > 0)
+						next = setClipTextStyle(next, clipIds, style.patch);
+					if (Object.keys(transform.patch).length > 0)
+						next = setClipTransform(next, clipIds, transform.patch);
 					return next;
 				},
 				(next) => ({
@@ -1276,6 +1558,7 @@ export function createAgentTools(api: EditorApi) {
 						const clip = findClip(next, id);
 						return clip ? describeClip(clip, next.fps) : { id, missing: true };
 					}),
+					...ignoredStyleReceipt(ignored),
 				}),
 			);
 		},
@@ -3461,15 +3744,21 @@ export function createAgentTools(api: EditorApi) {
 				null;
 
 			// Style, animation and placement apply to the clips this call makes.
-			const style = { ...((args.style ?? {}) as Record<string, unknown>) };
-			const animation = asString(args.animation);
-			if (animation) style.animation = animation;
-			const highlightColor = asString(args.highlightColor);
-			if (highlightColor) style.highlightColor = highlightColor;
+			const style = textStyleArgs(args);
+			if (style.errors.length > 0) return fail("invalid_argument", style.errors.join(" "));
+			const transform = parseTextTransform(args.transform);
+			const ignored = [...style.ignored.map((key) => `style.${key}`), ...transform.ignored];
+			const perCaption = asNumber(args.wordsPerCaption) ?? asNumber(args.maxWords);
+			if (perCaption !== null && (perCaption < 1 || perCaption > 20))
+				return fail("invalid_argument", "wordsPerCaption must be between 1 and 20.");
 			const placement = {
-				style: Object.keys(style).length ? style : undefined,
-				transform: (args.transform ?? null) as Record<string, unknown> | null,
-				maxWords: asNumber(args.maxWords),
+				style: Object.keys(style.patch).length
+					? (style.patch as Record<string, unknown>)
+					: undefined,
+				transform: Object.keys(transform.patch).length
+					? (transform.patch as Record<string, unknown>)
+					: null,
+				maxWords: perCaption === null ? null : Math.round(perCaption),
 			};
 
 			if (subtitles) {
@@ -3480,6 +3769,7 @@ export function createAgentTools(api: EditorApi) {
 						status: "added",
 						source: "subtitles",
 						captionGroupId: groupId,
+						...ignoredStyleReceipt(ignored),
 						...(asString(args.language)
 							? {
 									note: "`language` is ignored for supplied subtitles — the cues are used exactly as given.",
@@ -3499,6 +3789,7 @@ export function createAgentTools(api: EditorApi) {
 			// it started rather than blocking the call for minutes.
 			void api.transcribe(host, placement);
 			return ok({
+				...ignoredStyleReceipt(ignored),
 				status: "started",
 				note: "Transcription runs locally and can take a while. Poll get_transcript, or pass `subtitles` to skip it.",
 			});
@@ -7194,83 +7485,26 @@ export function createAgentTools(api: EditorApi) {
 					`No caption group '${wanted}'. Present: ${groups.join(", ")}.`,
 				);
 
-			const patch: Record<string, unknown> = {};
-			const family = asString(args.fontFamily);
-			if (family) patch.fontFamily = family;
-			const size = asNumber(args.fontSize);
-			if (size !== null) {
-				if (size < CLIP_LIMITS.fontSize.min || size > CLIP_LIMITS.fontSize.max)
-					return fail(
-						"invalid_argument",
-						`fontSize must be ${CLIP_LIMITS.fontSize.min}–${CLIP_LIMITS.fontSize.max}.`,
-					);
-				patch.fontSize = Math.round(size);
+			// The flat fields and a nested `style` both go through the one parser,
+			// so style_captions accepts exactly what update_text does.
+			const flat: Record<string, unknown> = {};
+			for (const [key, value] of Object.entries(args)) {
+				if (["groupId", "preset", "wordsPerCaption", "style"].includes(key)) continue;
+				flat[key] = value;
 			}
-			const color = asString(args.color);
-			if (color) {
-				if (!/^#[0-9a-fA-F]{6}$/.test(color))
-					return fail(
-						"invalid_argument",
-						`color must be a hex like '#FFEE00', not '${color}'.`,
-					);
-				patch.color = color.toUpperCase();
-			}
-			for (const flag of ["bold", "italic", "uppercase"] as const)
-				if (typeof args[flag] === "boolean") patch[flag] = args[flag];
-			const alignment = asString(args.alignment);
-			if (alignment) {
-				if (!["left", "center", "right"].includes(alignment))
-					return fail("invalid_argument", `Unknown alignment '${alignment}'.`);
-				patch.alignment = alignment;
-			}
-			const animation = asString(args.animation);
-			if (animation) {
-				if (!TEXT_ANIMATIONS.includes(animation))
-					return fail(
-						"invalid_argument",
-						`Unknown animation '${animation}'. One of ${TEXT_ANIMATIONS.join(", ")}.`,
-					);
-				patch.animation = animation;
-			}
-			const plate = asString(args.backgroundColor);
-			if (plate) {
-				if (plate.toLowerCase() === "none") {
-					// Explicitly cleared rather than left undefined, or the merge
-					// below would keep whatever plate was already there.
-					patch.backgroundColor = undefined;
-				} else if (!/^#[0-9a-fA-F]{6}$/.test(plate)) {
-					return fail(
-						"invalid_argument",
-						`backgroundColor must be a hex like '#000000' or 'none', not '${plate}'.`,
-					);
-				} else {
-					patch.backgroundColor = plate.toUpperCase();
-				}
-			}
-			for (const key of [
-				"backgroundOpacity",
-				"backgroundPadding",
-				"backgroundRadius",
-			] as const) {
-				const value = asNumber(args[key]);
-				if (value === null) continue;
-				if (value < 0 || value > 1)
-					return fail("invalid_argument", `${key} must be between 0 and 1.`);
-				patch[key] = value;
-			}
-
-			const highlight = asString(args.highlightColor);
-			if (highlight) {
-				if (!/^#[0-9a-fA-F]{6}$/.test(highlight))
-					return fail(
-						"invalid_argument",
-						`highlightColor must be a hex like '#FFE14D', not '${highlight}'.`,
-					);
-				patch.highlightColor = highlight.toUpperCase();
-			}
+			const nested =
+				args.style && typeof args.style === "object" && !Array.isArray(args.style)
+					? (args.style as Record<string, unknown>)
+					: {};
+			const parsed = parseTextStyle({ ...nested, ...flat });
+			if (parsed.errors.length > 0) return fail("invalid_argument", parsed.errors.join(" "));
+			const patch = parsed.patch;
+			const perCaption = asNumber(args.wordsPerCaption);
+			if (perCaption !== null && (perCaption < 1 || perCaption > 20))
+				return fail("invalid_argument", "wordsPerCaption must be between 1 and 20.");
 
 			const presetName = asString(args.preset);
-			let applied = patch;
+			let applied: TextStylePatch = patch;
 			if (presetName) {
 				const preset = CAPTION_PRESETS[presetName];
 				if (!preset)
@@ -7282,10 +7516,10 @@ export function createAgentTools(api: EditorApi) {
 				// take a whole look and still override one thing about it.
 				applied = { ...preset, ...patch };
 			}
-			if (Object.keys(applied).length === 0)
+			if (Object.keys(applied).length === 0 && perCaption === null)
 				return fail(
 					"invalid_argument",
-					"Pass a preset, or at least one style property to change.",
+					"Pass a preset, wordsPerCaption, or at least one style property to change.",
 				);
 
 			// Every clip in the group at once: restyling them one at a time is
@@ -7309,21 +7543,46 @@ export function createAgentTools(api: EditorApi) {
 					(clip) => targets.includes(clip.id) && (clip.captionWords?.length ?? 0) > 0,
 				);
 
+			const warnings = [
+				...((ignoredStyleReceipt(parsed.ignored).warnings as string[] | undefined) ?? []),
+				...(perWord && timed.length === 0
+					? [
+							`'${applied.animation}' is a per-word animation and none of these captions carry word timings, so they will animate as whole lines. narrate_timeline writes the timings; add_captions from an SRT may not.`,
+						]
+					: []),
+			];
+			const regrouped = wanted ? [wanted] : groups;
 			return mutate(
 				"Style captions",
-				(t) => setClipTextStyle(t, targets, applied),
-				() => ({
+				(t) => {
+					let next =
+						Object.keys(applied).length > 0 ? setClipTextStyle(t, targets, applied) : t;
+					// Re-cut after restyling, so the new clips inherit the new look.
+					if (perCaption !== null)
+						for (const group of regrouped)
+							next = rechunkCaptionGroup(
+								next,
+								group,
+								Math.round(perCaption),
+							).timeline;
+					return next;
+				},
+				(next) => ({
 					styled: targets.length,
-					groups: wanted ? [wanted] : groups,
+					groups: regrouped,
 					...(presetName ? { preset: presetName } : {}),
-					applied,
-					...(perWord && timed.length === 0
+					...(perCaption !== null
 						? {
-								warnings: [
-									`'${applied.animation}' is a per-word animation and none of these captions carry word timings, so they will animate as whole lines. narrate_timeline writes the timings; add_captions from an SRT may not.`,
-								],
+								wordsPerCaption: Math.round(perCaption),
+								clipCount: regrouped.reduce(
+									(sum, group) => sum + captionClips(next, group).length,
+									0,
+								),
 							}
 						: {}),
+					applied,
+					...(parsed.ignored.length > 0 ? { ignoredStyleKeys: parsed.ignored } : {}),
+					...(warnings.length > 0 ? { warnings } : {}),
 				}),
 			);
 		},

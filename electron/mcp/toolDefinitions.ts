@@ -57,15 +57,32 @@ export const VIDEO_LAYOUTS = [
 	"three_up",
 ] as const;
 
+// Must match TEXT_ANIMATIONS in src/palmier-ui/model.ts, which is what the
+// renderer implements; textStyle.test.ts holds the two together.
 export const TEXT_ANIMATIONS = [
 	"off",
 	"fade",
 	"slide_up",
 	"pop",
+	"bounce",
 	"typewriter",
 	"word_by_word",
 	"karaoke",
-	"bounce",
+] as const;
+
+/** Every caption look style_captions knows, in the order it describes them. */
+export const CAPTION_PRESET_NAMES = [
+	"bold_pop",
+	"highlight_box",
+	"two_tone",
+	"subtle",
+	"karaoke",
+	"shorts",
+	"pop",
+	"typewriter",
+	"clean",
+	"emphasis",
+	"plate",
 ] as const;
 
 function textBoxTransformProperties(): Record<string, JsonSchema> {
@@ -78,135 +95,227 @@ function textBoxTransformProperties(): Record<string, JsonSchema> {
 	};
 }
 
-const TEXT_STYLE_SCHEMA: JsonSchema = {
-	type: "object",
-	description: "Partial text-style patch. Omit properties to keep defaults or existing values.",
-	properties: {
-		fontName: { type: "string", description: "Font PostScript name." },
+const HEX_COLOR = "Hex colour: #RGB, #RRGGBB, or #RRGGBBAA.";
+
+/**
+ * Text style properties, flat, in the renderer's own names. Shared by the
+ * nested `style` object and style_captions' top-level fields, so the two can
+ * never describe different things.
+ */
+function textStyleProperties(): Record<string, JsonSchema> {
+	return {
+		fontFamily: {
+			type: "string",
+			description:
+				"Font family name, e.g. 'Inter'. Falls back to the system UI font when it isn't installed.",
+		},
 		fontSize: {
 			type: "number",
 			minimum: 12,
 			maximum: 300,
-			description: "Font size in canvas points.",
+			description:
+				"Font size in canvas points (the timeline's own pixels), so 64 on a 1080×1920 timeline is 64px of a 1920px-tall frame.",
 		},
-		widthScale: {
+		fontWeight: {
 			type: "number",
-			minimum: 0.5,
-			maximum: 2,
-			description: "Glyph width multiplier. 1 preserves the font's original width.",
+			minimum: 100,
+			maximum: 900,
+			description:
+				"100–900, overriding bold. 800–900 is the heavy short-form caption weight; bold alone is 700.",
 		},
-		heightScale: {
-			type: "number",
-			minimum: 0.5,
-			maximum: 2,
-			description: "Glyph height multiplier. 1 preserves the font's original height.",
+		bold: { type: "boolean", description: "Bold (700) when fontWeight is unset." },
+		italic: { type: "boolean", description: "Italic." },
+		uppercase: {
+			type: "boolean",
+			description: "Display in capitals; the text itself is kept.",
 		},
-		bold: { type: "boolean", description: "Bold font trait." },
-		italic: { type: "boolean", description: "Italic font trait." },
-		underline: { type: "boolean", description: "Draw a line below the text." },
-		strikethrough: { type: "boolean", description: "Draw a line through the text." },
-		overline: { type: "boolean", description: "Draw a line above the text." },
 		tracking: {
 			type: "number",
 			minimum: -20,
 			maximum: 100,
-			description: "Spacing between characters in canvas points.",
+			description: "Space added after every character, in canvas points.",
 		},
 		lineSpacing: {
 			type: "number",
 			minimum: -100,
 			maximum: 300,
-			description: "Additional spacing between lines in canvas points.",
+			description: "Extra space between lines, in canvas points. 0 is 1.15× the font size.",
 		},
-		fontCase: {
-			type: "string",
-			enum: ["mixed", "uppercase", "lowercase"],
-			description: "Non-destructive display casing.",
+		maxWidth: {
+			type: "number",
+			minimum: 0.1,
+			maximum: 1,
+			description:
+				"Lines wrap past this fraction of the text box's width. Default 0.92. Lower it to force shorter lines.",
+		},
+		wrap: {
+			type: "boolean",
+			description: "false keeps every line as written (only \\n breaks). Default true.",
 		},
 		alignment: {
 			type: "string",
 			enum: ["left", "center", "right"],
-			description: "Text alignment.",
+			description: "Line alignment within the text box.",
 		},
-		color: { type: "string", description: "Text color as #RGB, #RRGGBB, or #RRGGBBAA." },
+		color: { type: "string", description: `Text colour. ${HEX_COLOR}` },
+		animation: {
+			type: "string",
+			enum: [...TEXT_ANIMATIONS],
+			description:
+				"fade, slide_up, pop and bounce animate the whole block in; typewriter reveals characters; karaoke and word_by_word are per-word and need caption word timings. off clears.",
+		},
+		highlightColor: {
+			type: "string",
+			description: `Colour of the word being spoken under karaoke. ${HEX_COLOR}`,
+		},
+		spokenColor: {
+			type: "string",
+			description: `Karaoke: colour a word keeps once said, so the line fills in two tones. 'none' returns words to color. ${HEX_COLOR}`,
+		},
+		upcomingOpacity: {
+			type: "number",
+			minimum: 0,
+			maximum: 1,
+			description:
+				"Karaoke: opacity of words not yet said. Default 0.45; 1 shows the whole line at full strength.",
+		},
+		activeWordScale: {
+			type: "number",
+			minimum: 0.5,
+			maximum: 2,
+			description:
+				"karaoke / word_by_word: the spoken word pops to this scale (1.15 is the usual short-form value). 1 or absent is no pop.",
+		},
+		activeWordBackground: {
+			type: "string",
+			description: `karaoke / word_by_word: a rounded box of this colour behind the spoken word. 'none' removes it. ${HEX_COLOR}`,
+		},
+		strokeColor: {
+			type: "string",
+			description: `Outline colour around every glyph. 'none' removes the outline. ${HEX_COLOR}`,
+		},
+		strokeWidth: {
+			type: "number",
+			minimum: 0,
+			maximum: 40,
+			description:
+				"Outline width outside the glyphs, in canvas points. 4–8 suits 60–80pt captions.",
+		},
+		shadowColor: {
+			type: "string",
+			description: `Drop shadow colour; use #RRGGBBAA for opacity. 'none' removes it. ${HEX_COLOR}`,
+		},
+		shadowBlur: {
+			type: "number",
+			minimum: 0,
+			maximum: 100,
+			description: "Shadow blur, canvas points.",
+		},
+		shadowOffsetX: {
+			type: "number",
+			minimum: -200,
+			maximum: 200,
+			description: "Shadow offset right, canvas points.",
+		},
+		shadowOffsetY: {
+			type: "number",
+			minimum: -200,
+			maximum: 200,
+			description: "Shadow offset down, canvas points.",
+		},
+		backgroundColor: {
+			type: "string",
+			description: `A filled plate behind the whole text block. 'none' removes it. ${HEX_COLOR}`,
+		},
+		backgroundOpacity: {
+			type: "number",
+			minimum: 0,
+			maximum: 1,
+			description: "Plate opacity. Default 1.",
+		},
+		backgroundPadding: {
+			type: "number",
+			minimum: 0,
+			maximum: 1,
+			description: "Plate padding as a fraction of the font size. Default 0.35.",
+		},
+		backgroundRadius: {
+			type: "number",
+			minimum: 0,
+			maximum: 1,
+			description:
+				"Plate corner radius as a fraction of its height. Default 0.25; 0.5 is a pill.",
+		},
+	};
+}
+
+const TEXT_STYLE_SCHEMA: JsonSchema = {
+	type: "object",
+	description:
+		"Partial text-style patch; omitted properties keep their current values. Also accepted: fontName (= fontFamily), fontCase 'mixed'|'uppercase', and the grouped forms below. Keys Rendr can't draw are not stored — the result lists them in ignoredStyleKeys.",
+	properties: {
+		...textStyleProperties(),
+		fontName: { type: "string", description: "Alias of fontFamily." },
+		fontCase: {
+			type: "string",
+			enum: ["mixed", "uppercase"],
+			description: "Alias of uppercase.",
+		},
 		outline: {
 			type: "object",
+			description: "Grouped strokeColor/strokeWidth. {enabled: false} removes the outline.",
 			properties: {
 				enabled: { type: "boolean" },
-				color: { type: "string", description: "Outline color hex." },
+				color: { type: "string", description: "Outline colour. Default #000000." },
 				width: {
 					type: "number",
 					minimum: 0,
 					maximum: 40,
-					description: "Width in canvas points.",
+					description: "Width in canvas points. Default 4.",
 				},
 			},
 		},
 		shadow: {
 			type: "object",
+			description: "Grouped drop shadow. {enabled: false} removes it.",
 			properties: {
 				enabled: { type: "boolean" },
-				color: {
-					type: "string",
-					description: "Shadow color hex. Six-digit colors preserve the current opacity.",
-				},
-				opacity: { type: "number", minimum: 0, maximum: 1 },
+				color: { type: "string", description: "Shadow colour. Default #000000." },
+				opacity: { type: "number", minimum: 0, maximum: 1, description: "Default 0.6." },
 				offset: {
 					type: "object",
 					properties: {
 						x: { type: "number", minimum: -200, maximum: 200 },
 						y: { type: "number", minimum: -200, maximum: 200 },
 					},
+					description: "Canvas points. Default {x: 0, y: 4}.",
 				},
 				blur: {
 					type: "number",
 					minimum: 0,
 					maximum: 100,
-					description: "Blur radius in canvas points.",
+					description: "Blur radius in canvas points. Default 8.",
 				},
 			},
 		},
 		background: {
 			type: "object",
+			description: "Grouped plate fields. {enabled: false} removes the plate.",
 			properties: {
 				enabled: { type: "boolean" },
-				color: {
-					type: "string",
-					description:
-						"Background color hex. Six-digit colors preserve the current opacity.",
-				},
+				color: { type: "string", description: "Plate colour. Default #000000." },
 				opacity: { type: "number", minimum: 0, maximum: 1 },
 				padding: {
-					type: "object",
-					properties: {
-						x: { type: "number", minimum: 0, maximum: 300 },
-						y: { type: "number", minimum: 0, maximum: 300 },
-					},
-				},
-				center: {
-					type: "object",
-					properties: {
-						x: { type: "number", minimum: -500, maximum: 500 },
-						y: { type: "number", minimum: -500, maximum: 500 },
-					},
-				},
-				cornerRadius: {
 					type: "number",
 					minimum: 0,
-					maximum: 300,
-					description: "Corner radius in canvas points.",
+					maximum: 1,
+					description: "Fraction of the font size.",
 				},
-				outline: {
-					type: "object",
-					properties: {
-						color: { type: "string", description: "Background outline color hex." },
-						width: {
-							type: "number",
-							minimum: 0,
-							maximum: 40,
-							description: "Background outline width in canvas points.",
-						},
-					},
+				radius: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+					description: "Fraction of the plate's height.",
 				},
 			},
 		},
@@ -1256,7 +1365,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 	{
 		name: "add_texts",
 		description:
-			"Adds text clips as timeline layers. Omit trackIndex on every entry to create one new top video track; otherwise set trackIndex on every entry. Transform is normalized text-box center/size; center-only auto-fits, all four fields override the box. Use the nested style object for typography, outline, shadow, and background. fillMode 'footage' stencils layers below through the letter shapes. Use add_captions for spoken audio captions. Unknown fields are rejected.",
+			"Adds text clips as timeline layers. Omit trackIndex on every entry to put them on one new top video track (a second new track only where entries overlap); otherwise set trackIndex on every entry and the span must be free on that track. Each entry's transform places its text box (normalized center/size); lines wrap to the box width. Each entry's style sets typography, outline, shadow, plate and animation — the same fields update_text takes. Style keys Rendr can't draw are not stored and come back in ignoredStyleKeys. Use add_captions for spoken audio captions.",
 		inputSchema: object(
 			{
 				entries: {
@@ -1268,7 +1377,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 							trackIndex: {
 								type: "integer",
 								description:
-									"Existing non-audio track. Omit on all entries to create a new top track.",
+									"Existing video track index (get_timeline). The entry's span must be free there. Omit on all entries to stack the text on new top tracks.",
 							},
 							startFrame: { type: "integer", description: "Timeline start frame." },
 							endFrame: {
@@ -1280,21 +1389,19 @@ export const EDITING_TOOLS: AgentTool[] = [
 							transform: {
 								type: "object",
 								description:
-									"Text box. Omit for centered auto-fit; rotation alone rotates an auto-fit box; center only auto-fits size; all four override.",
+									"Text box, normalized 0-1. Omitted fields keep the default full-frame centred box. Text is centred in the box and wraps at its width.",
 								properties: textBoxTransformProperties(),
 							},
 							style: TEXT_STYLE_SCHEMA,
 							animation: {
 								type: "string",
 								enum: [...TEXT_ANIMATIONS],
-								description: "Animation preset; off clears.",
-							},
-							highlightColor: { type: "string", description: "Active-word hex." },
-							fillMode: {
-								type: "string",
-								enum: ["color", "footage"],
 								description:
-									"color = solid typography (default). footage = stencil layers below through the letter shapes.",
+									"Animation preset; same as style.animation. off clears.",
+							},
+							highlightColor: {
+								type: "string",
+								description: "Active-word hex; same as style.highlightColor.",
 							},
 						},
 						required: ["startFrame", "endFrame", "content"],
@@ -1307,7 +1414,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 	{
 		name: "update_text",
 		description:
-			"Updates text clips or a captionGroupId. The nested style object is a partial patch: omitted values stay unchanged. Use it for typography, color, outline, shadow, and background. fillMode 'footage' stencils layers below through the glyphs. Content and layout-affecting style changes auto-fit the box unless transform includes box geometry; rotation alone keeps auto-fit. Static rotation uses clockwise degrees and clears rotation keyframes. Unknown fields are rejected.",
+			"Updates text clips or a whole captionGroupId. The nested style object is a partial patch: omitted values stay unchanged. Use it for typography, colour, outline (strokeColor/strokeWidth), shadow, plate, line wrapping and the karaoke active-word treatment (activeWordScale, activeWordBackground, spokenColor). Style keys Rendr can't draw are not stored and come back in ignoredStyleKeys; invalid values fail the call. Changing a caption's content re-times its words across the clip.",
 		inputSchema: object({
 			clipIds: {
 				type: "array",
@@ -1325,38 +1432,53 @@ export const EDITING_TOOLS: AgentTool[] = [
 			animation: {
 				type: "string",
 				enum: [...TEXT_ANIMATIONS],
-				description: "Animation preset; off clears.",
+				description: "Animation preset; same as style.animation. off clears.",
 			},
-			highlightColor: { type: "string", description: "Active-word hex." },
-			fillMode: {
+			highlightColor: {
 				type: "string",
-				enum: ["color", "footage"],
-				description:
-					"color = solid typography. footage = stencil layers below through the letter shapes.",
+				description: "Active-word hex; same as style.highlightColor.",
 			},
 		}),
 	},
 	{
 		name: "add_captions",
 		description:
-			"Transcribes the timeline's spoken audio and creates styled caption text clips on their own track — no targeting needed; it finds the spoken content itself. Per-word animations are timed from the transcript. Returns the caption group summary (captionGroupId, clipCount, frameRange, shared style, textPreview) — restyle it later with update_text and that captionGroupId.",
+			"Transcribes the timeline's spoken audio and creates styled caption text clips on their own track — no targeting needed; it finds the spoken content itself. Per-word animations are timed from the transcript. Captions are placed by the timeline's shape: low in the frame for landscape, and in the lower-middle safe zone for vertical (9:16), above the bottom fifth that TikTok/Reels/Shorts UI covers. For the short-form look pass wordsPerCaption 2–3 and then style_captions preset 'bold_pop' or 'highlight_box'. Returns the caption group (captionGroupId) — restyle it later with style_captions or update_text.",
 		inputSchema: object({
 			language: { type: "string", description: "BCP-47 speech language." },
 			transform: {
 				type: "object",
-				description: "Caption box position; size is auto-fit per caption.",
-				properties: {
-					centerX: { type: "number", description: "0-1 horizontal center." },
-					centerY: { type: "number", description: "0-1 vertical center." },
-				},
+				description:
+					"Caption box, normalized 0-1. Omit for the aspect-aware default; lines wrap at the box width.",
+				properties: textBoxTransformProperties(),
 			},
-			censorProfanity: { type: "boolean", description: "Mask profanity." },
-			maxWords: { type: "integer", description: "Max words per caption." },
+			censorProfanity: {
+				type: "boolean",
+				description: "Not supported — true fails. Use remove_words with exact tokens.",
+			},
+			wordsPerCaption: {
+				type: "integer",
+				minimum: 1,
+				maximum: 20,
+				description:
+					"At most this many words on screen at once. 1–3 is the short-form (Shorts/Reels/TikTok) look; omit for subtitle-length lines. Applies to supplied subtitles too.",
+			},
+			maxWords: { type: "integer", description: "Alias of wordsPerCaption." },
+			subtitles: {
+				type: "string",
+				description:
+					"SRT or WebVTT text to place instead of transcribing. Word timing is inferred when the cues carry none.",
+			},
+			clipId: {
+				type: "string",
+				description:
+					"Clip whose audio to transcribe and whose timing the cues map through. Default: the first audio or video clip.",
+			},
 			style: TEXT_STYLE_SCHEMA,
 			animation: {
 				type: "string",
 				enum: [...TEXT_ANIMATIONS],
-				description: "Caption animation preset.",
+				description: "Caption animation preset; same as style.animation.",
 			},
 			highlightColor: { type: "string", description: "Active-word hex." },
 		}),
@@ -3169,55 +3291,27 @@ export const FINISH_TOOLS: AgentTool[] = [
 	{
 		name: "style_captions",
 		description:
-			"Restyle a whole caption group in one action. Captions are many short clips, so update_text on each is impractical and drifts — one missed clip and a word changes font mid-sentence. Sets font, size, colour, weight, alignment, case, animation, and the active-word highlight across every clip in the group at once. Use get_timeline to see the caption groups; omit groupId to restyle every caption on the timeline.\n\nA preset is the fast way in: 'karaoke' lights each word as it is spoken, 'shorts' is the heavy yellow-highlight look short-form video uses, 'pop' scales each word in on its own beat, 'typewriter' reveals character by character, 'clean' is a quiet fade with no per-word motion, 'emphasis' keeps the line still but colours the word being said, and 'plate' puts the text on a dark rounded scrim so it stays readable over any footage. A preset sets several fields at once; anything you pass alongside it wins, so preset 'shorts' with color '#FFFFFF' gives the shorts layout in white.\n\nPer-word animations need word timings, which narrate_timeline writes and imported SRT files do not always carry. Without them a word-level preset degrades to a whole-line fade rather than failing.",
+			"Restyle a whole caption group in one action. Captions are many short clips, so update_text on each is impractical and drifts — one missed clip and a word changes font mid-sentence. Sets any text-style field (font, weight, size, colour, outline, shadow, plate, wrapping, animation, and the active-word highlight/pop/box) across every clip in the group at once, and can re-cut the group to a number of words per caption. Use get_timeline to see the caption groups; omit groupId to restyle every caption on the timeline.\n\nA preset is the fast way in. Short-form: 'bold_pop' is heavy white capitals with a black outline and the spoken word popping 1.15× in yellow (the Hormozi look); 'highlight_box' puts the spoken word on a coloured rounded box; 'two_tone' fills the line yellow as it is spoken; 'subtle' is clean mixed-case lower captions with a soft shadow. Classic: 'karaoke' lights each word as it is spoken, 'shorts' is heavy outlined yellow-highlight capitals, 'pop' scales the line in, 'typewriter' reveals character by character, 'clean' is a quiet fade, 'emphasis' reveals word by word, and 'plate' puts the text on a dark rounded scrim. A preset is a whole look — it clears outline, shadow, pop and plate fields it doesn't set — and anything you pass alongside it wins, so preset 'bold_pop' with highlightColor '#22C55E' gives the same look in green. Pair short-form presets with wordsPerCaption 2–3.\n\nPer-word animations need word timings, which add_captions and narrate_timeline write and imported SRT files do not always carry. Without them a word-level preset degrades to a whole-line fade rather than failing.",
 		inputSchema: object({
 			groupId: {
 				type: "string",
 				description: "Caption group to restyle. Omit for every caption group.",
 			},
-			fontFamily: { type: "string", description: "Font name." },
-			fontSize: { type: "integer", description: "Point size, 12–300." },
-			color: { type: "string", description: "Hex colour, e.g. '#FFEE00'." },
-			bold: { type: "boolean" },
-			italic: { type: "boolean" },
-			uppercase: { type: "boolean" },
-			alignment: { type: "string", enum: ["left", "center", "right"] },
 			preset: {
 				type: "string",
-				enum: ["karaoke", "shorts", "pop", "typewriter", "clean", "emphasis"],
+				enum: [...CAPTION_PRESET_NAMES],
 				description:
 					"A whole look in one word. Applied first, so any explicit field you pass overrides it.",
 			},
-			animation: {
-				type: "string",
-				enum: ["off", "fade", "slide_up", "pop", "typewriter", "word_by_word", "karaoke"],
+			wordsPerCaption: {
+				type: "integer",
+				minimum: 1,
+				maximum: 20,
 				description:
-					"How the line arrives. 'karaoke' and 'word_by_word' are per-word and need word timings; the rest animate the whole line.",
+					"Re-cut the group so at most this many words show at once (1–3 for Shorts/Reels/TikTok). Works from the captions' own word timing; never joins words across a pause. Caption clip ids change.",
 			},
-			highlightColor: {
-				type: "string",
-				description:
-					"Hex colour for the word currently being spoken, used by karaoke and word_by_word. This is what makes a caption readable as speech rather than as a block of text.",
-			},
-			backgroundColor: {
-				type: "string",
-				description:
-					"Hex colour for a filled plate behind the text, e.g. '#000000'. This is the only thing that makes a caption reliably readable over footage whose brightness you do not control — white text disappears on a docs site and dark text disappears on a dark app, and a plate stops it mattering. Pass 'none' to remove it.",
-			},
-			backgroundOpacity: {
-				type: "number",
-				description:
-					"0–1. Default 1. Around 0.6–0.75 reads as a scrim: the picture still shows through, and the text still holds.",
-			},
-			backgroundPadding: {
-				type: "number",
-				description: "Space around the text, as a fraction of the font size. Default 0.35.",
-			},
-			backgroundRadius: {
-				type: "number",
-				description:
-					"Corner rounding, as a fraction of the plate's height. Default 0.25; 0 is a hard rectangle and 0.5 is a full pill.",
-			},
+			...textStyleProperties(),
+			style: TEXT_STYLE_SCHEMA,
 		}),
 	},
 	{

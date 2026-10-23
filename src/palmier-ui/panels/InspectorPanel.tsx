@@ -35,7 +35,13 @@ import {
 	parseKeyframeRows,
 	sampleTrack,
 } from "../keyframes";
-import { CLIP_LIMITS, type ClipModel, NEUTRAL_GRADE, type TextAnimation } from "../model";
+import {
+	CLIP_LIMITS,
+	type ClipModel,
+	NEUTRAL_GRADE,
+	TEXT_ANIMATIONS,
+	type TextAnimation,
+} from "../model";
 import { type HueTarget, LutParseError, parseCubeLut } from "../pixelGrade";
 import { getVoiceStatus, installVoice, type VoiceStatus, voiceSupported } from "../voice";
 import {
@@ -82,16 +88,6 @@ const BALANCE_RANGES = [
 ] as const;
 
 const BLEND_MODES = ["normal", "multiply", "screen", "overlay", "softLight", "difference"] as const;
-
-const TEXT_ANIMATIONS = [
-	"off",
-	"fade",
-	"slide_up",
-	"pop",
-	"typewriter",
-	"word_by_word",
-	"karaoke",
-] as const;
 
 import { buildInteractionZoomSuggestions } from "@/components/video-editor/timeline/zoomSuggestionUtils";
 import { PanelHeader } from "../Panel";

@@ -19,14 +19,26 @@ export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "softLigh
 
 export type FadeInterpolation = "linear" | "smooth";
 
-export type TextAnimation =
-	| "off"
-	| "fade"
-	| "slide_up"
-	| "pop"
-	| "typewriter"
-	| "word_by_word"
-	| "karaoke";
+/**
+ * Every text animation preset, in one place.
+ *
+ * The agent tools, the inspector and the tool schema all list these, and they
+ * drifted: the schema once advertised a "bounce" nothing implemented. Listing
+ * them here lets each of those read the same array, and a test pins the
+ * schema's copy to it.
+ */
+export const TEXT_ANIMATIONS = [
+	"off",
+	"fade",
+	"slide_up",
+	"pop",
+	"bounce",
+	"typewriter",
+	"word_by_word",
+	"karaoke",
+] as const;
+
+export type TextAnimation = (typeof TEXT_ANIMATIONS)[number];
 
 /** Normalized canvas placement — 0-1 across the canvas, like Palmier's transform. */
 export interface Transform {
@@ -103,6 +115,56 @@ export interface TextStyle {
 	backgroundPadding?: number;
 	/** Corner radius, as a fraction of the plate's height. Default 0.25. */
 	backgroundRadius?: number;
+
+	/**
+	 * 100–900. Overrides `bold` when set.
+	 *
+	 * Bold is 700, and the heavy short-form caption look needs 800–900: at 700
+	 * a stroked caption reads as outlined body text rather than as a slab.
+	 */
+	fontWeight?: number;
+	/** Extra space between lines, in canvas points (the timeline's pixels). */
+	lineSpacing?: number;
+	/**
+	 * The widest a line may run before it wraps, as a fraction of the text
+	 * box's width. Default 0.92, which leaves the margin the old CSS padding did.
+	 */
+	maxWidth?: number;
+	/** False keeps every line as written; only "\n" breaks. Default true. */
+	wrap?: boolean;
+
+	/**
+	 * An outline around every glyph, drawn behind the fill.
+	 *
+	 * This is what keeps white captions legible over bright footage without a
+	 * plate, and it is the defining feature of the short-form caption look.
+	 * Width is in canvas points, like fontSize, so it scales with the text.
+	 */
+	strokeColor?: string;
+	strokeWidth?: number;
+
+	/** A drop shadow under the glyphs. Blur and offsets are in canvas points. */
+	shadowColor?: string;
+	shadowBlur?: number;
+	shadowOffsetX?: number;
+	shadowOffsetY?: number;
+
+	/**
+	 * Per-word treatment of the word being spoken, for karaoke and word_by_word.
+	 *
+	 * `activeWordScale` pops it (1.15 is the usual short-form value), and
+	 * `activeWordBackground` sits a rounded box behind it. Both are absent by
+	 * default, which is the original colour-only highlight.
+	 */
+	activeWordScale?: number;
+	activeWordBackground?: string;
+	/**
+	 * Colour a word keeps once it has been said. Absent means it returns to
+	 * `color`; set, the line fills in two tones as it is spoken.
+	 */
+	spokenColor?: string;
+	/** Opacity of words not yet said, under karaoke. Default 0.45. */
+	upcomingOpacity?: number;
 }
 
 /** Recordly's zoom region, plus the focus point its camera reads. */

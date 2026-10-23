@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	captionClips,
 	captionGroups,
+	captionPlacementFor,
 	formatTimestamp,
 	groupWordsIntoCues,
 	inferWordTiming,
@@ -10,8 +12,10 @@ import {
 	parseSubtitles,
 	parseTimestamp,
 	placeCaptions,
+	rechunkCaptionGroup,
 	removeCaptionGroup,
 	SubtitleParseError,
+	splitCue,
 	toSrt,
 	toVtt,
 	transcriptText,
@@ -352,5 +356,102 @@ describe("placing captions twice", () => {
 		} as unknown as import("./reducers").TimelineModel;
 		const out = placeCaptions(withVideo, cues, { groupId: "narration", toFrame }).timeline;
 		expect(out.tracks.map((t) => t.id)).toContain("v1");
+	});
+});
+
+describe("short-form chunking", () => {
+	const cue = {
+		id: "c",
+		startMs: 0,
+		endMs: 3000,
+		text: "one two three four five",
+		words: [
+			{ text: "one", startMs: 100, endMs: 400 },
+			{ text: "two", startMs: 500, endMs: 900 },
+			{ text: "three", startMs: 1000, endMs: 1600 },
+			{ text: "four", startMs: 1700, endMs: 2200 },
+			{ text: "five", startMs: 2300, endMs: 2800 },
+		],
+	};
+
+	it("splits a cue into cards of at most N words that meet without a gap", () => {
+		const parts = splitCue(cue, 2);
+		expect(parts.map((part) => part.text)).toEqual(["one two", "three four", "five"]);
+		// The cue's own edges are kept, and each card ends where the next begins,
+		// so the screen never blanks between words.
+		expect(parts[0].startMs).toBe(0);
+		expect(parts[0].endMs).toBe(1000);
+		expect(parts[1].endMs).toBe(2300);
+		expect(parts[2].endMs).toBe(3000);
+	});
+
+	it("leaves a cue that already fits alone", () => {
+		expect(splitCue(cue, 5)).toEqual([cue]);
+	});
+
+	it("chunks imported subtitles when placed, inferring their word timing", () => {
+		const { timeline, clipCount } = placeCaptions(empty(), parseSubtitles(SRT), {
+			groupId: "g",
+			toFrame: (ms) => (ms / 1000) * 30,
+			wordsPerCaption: 1,
+		});
+		// "Hello there" + "Second line across two rows" is seven words.
+		expect(clipCount).toBe(7);
+		expect(timeline.tracks[0].clips.every((clip) => clip.captionWords?.length === 1)).toBe(
+			true,
+		);
+	});
+
+	it("re-cuts a placed group and keeps its look", () => {
+		const placed = placeCaptions(empty(), [cue], {
+			groupId: "g",
+			toFrame: (ms) => (ms / 1000) * 30,
+			style: { highlightColor: "#22C55E" },
+		}).timeline;
+		const { timeline, clipCount } = rechunkCaptionGroup(placed, "g", 3);
+		expect(clipCount).toBe(2);
+		const clips = captionClips(timeline, "g");
+		expect(clips.map((clip) => clip.content)).toEqual(["one two three", "four five"]);
+		expect(clips[0].startFrame).toBe(0);
+		expect(clips[0].endFrame).toBe(clips[1].startFrame);
+		expect(clips[1].endFrame).toBe(90);
+		expect(clips[1].captionWords?.[0]).toEqual({ text: "four", startFrame: 0, endFrame: 15 });
+		expect(clips.every((clip) => clip.textStyle?.highlightColor === "#22C55E")).toBe(true);
+		// Still one track for the group, not a track per card.
+		expect(timeline.tracks).toHaveLength(2);
+	});
+
+	it("never joins words across a pause when re-cutting larger", () => {
+		const placed = placeCaptions(
+			empty(),
+			[
+				{ id: "a", startMs: 0, endMs: 1000, text: "first part" },
+				{ id: "b", startMs: 3000, endMs: 4000, text: "second part" },
+			],
+			{ groupId: "g", toFrame: (ms) => (ms / 1000) * 30 },
+		).timeline;
+		const clips = captionClips(rechunkCaptionGroup(placed, "g", 8).timeline, "g");
+		expect(clips.map((clip) => clip.content)).toEqual(["first part", "second part"]);
+	});
+});
+
+describe("caption placement by aspect", () => {
+	it("keeps vertical captions above the band platform UI covers", () => {
+		const vertical = captionPlacementFor(1080, 1920);
+		expect(vertical.centerY).toBeLessThanOrEqual(0.72);
+		expect(vertical.width).toBeLessThan(0.8);
+	});
+
+	it("keeps landscape captions at the broadcast position", () => {
+		expect(captionPlacementFor(1920, 1080)).toEqual({ centerY: 0.86, width: 0.86 });
+	});
+
+	it("is what placeCaptions uses when no position is given", () => {
+		const vertical = { ...empty(), width: 1080, height: 1920 };
+		const clip = placeCaptions(vertical, parseSubtitles(SRT), {
+			groupId: "g",
+			toFrame: (ms) => (ms / 1000) * 30,
+		}).timeline.tracks[0].clips[0];
+		expect(clip.transform.centerY).toBe(0.7);
 	});
 });
