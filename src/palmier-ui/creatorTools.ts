@@ -322,6 +322,20 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 		return ok(result);
 	};
 
+	/** Where a run of back-to-back clips (cut segments of one take) ends on a track. */
+	const runEnd = (trackIndex: number, from: ClipModel): number => {
+		const clips = [...(timeline.tracks[trackIndex]?.clips ?? [])].sort(
+			(a, b) => a.startFrame - b.startFrame,
+		);
+		let end = from.endFrame;
+		for (const clip of clips) {
+			if (clip.startFrame < from.startFrame) continue;
+			if (clip.startFrame > end + 1) break;
+			end = Math.max(end, clip.endFrame);
+		}
+		return end;
+	};
+
 	/** What other graphics already occupy while this one is on screen. */
 	const otherGraphicRegions = (start: number, end: number, exceptId?: string): KeepOut[] =>
 		timeline.tracks.flatMap((track) =>
@@ -453,8 +467,27 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 				background: asString(args.background) ?? existing?.graphic?.background,
 			};
 
-			// Long enough for everything to land plus a beat to read it, unless told otherwise.
-			const settled = Math.ceil((settleSeconds(elements) + 3) * fps);
+			const layer: GraphicLayer =
+				asString(args.layer) === "behind" || asString(args.layer) === "front"
+					? (asString(args.layer) as GraphicLayer)
+					: template === "mind_map" && footageAsset?.matteAssetId
+						? "behind"
+						: "front";
+
+			// How long each kind lingers once it has landed, unless told otherwise:
+			// long enough to scan a QR code, short enough that a name plate doesn't
+			// overstay. A graphic behind the speaker is part of the scene, so it
+			// lasts as long as the run of footage it sits behind.
+			const linger: Record<string, number> = {
+				qr: 8,
+				lower_third: 5,
+				callout: 4,
+				key_points: 5,
+				mind_map: 6,
+			};
+			const settled = Math.ceil((settleSeconds(elements) + (linger[template] ?? 4)) * fps);
+			const behindUntil =
+				layer === "behind" && footage ? runEnd(footage.trackIndex, footage.clip) : null;
 			const durationFrames = Math.max(
 				Math.round(fps * 0.5),
 				Math.round(
@@ -462,7 +495,9 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 						? args.durationFrames
 						: existing
 							? existing.endFrame - existing.startFrame
-							: settled,
+							: behindUntil !== null
+								? Math.max(settled, behindUntil - start)
+								: settled,
 				),
 			);
 			const end = start + durationFrames;
@@ -481,12 +516,6 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 				);
 			}
 
-			const layer: GraphicLayer =
-				asString(args.layer) === "behind" || asString(args.layer) === "front"
-					? (asString(args.layer) as GraphicLayer)
-					: template === "mind_map" && footageAsset?.matteAssetId
-						? "behind"
-						: "front";
 			const id = `graphic-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 			const name = asString(args.name) ?? `${template.replace(/_/g, " ")}`;
 			let placement: ReturnType<typeof placeGraphic> | null = null;

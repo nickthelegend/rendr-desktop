@@ -70,9 +70,17 @@ describe("placeGraphic", () => {
 		expect(timeline.tracks[1].id).toBe("v1");
 	});
 
-	it("puts a 'behind' graphic directly under the speaker and moves their colour backdrop onto it", () => {
+	it("puts a 'behind' graphic under the speaker and moves their colour to a full-length backdrop", () => {
+		// Two cut segments of one take, both on green. A graphic that lasts three
+		// seconds must not take the green with it when it ends.
 		const start = timelineWith([
 			footageClip({ background: { mode: "color", color: "#0B4F3C" } }),
+			footageClip({
+				id: "cam2",
+				startFrame: 300,
+				endFrame: 600,
+				background: { mode: "color", color: "#0B4F3C" },
+			}),
 		]);
 		const placed = placeGraphic(start, {
 			id: "g",
@@ -82,11 +90,16 @@ describe("placeGraphic", () => {
 			endFrame: 90,
 			layer: "behind",
 		});
-		const [top, below] = placed.timeline.tracks;
+		const [top, graphic, backdrop] = placed.timeline.tracks;
 		expect(top.id).toBe("v1");
-		expect(top.clips[0].background?.mode).toBe("remove");
-		expect(below.clips[0].graphic?.background).toBe("#0B4F3C");
-		expect(placed.movedBackgroundFrom).toBe("cam");
+		expect(top.clips.map((clip) => clip.background?.mode)).toEqual(["remove", "remove"]);
+		expect(graphic.clips[0].graphic?.background).toBeUndefined();
+		expect(backdrop.clips[0]).toMatchObject({
+			startFrame: 0,
+			endFrame: 600,
+			graphic: { background: "#0B4F3C" },
+		});
+		expect(placed).toMatchObject({ movedBackgroundFrom: "cam", backdropClipId: "g-backdrop" });
 	});
 
 	it("keeps a layout clear of the speaker's face and body", () => {
@@ -132,9 +145,17 @@ describe("add_graphic", () => {
 		const after = committed(commit, start);
 		const graphic = after.tracks[1].clips[0];
 		expect(graphic.mediaType).toBe("graphic");
-		expect(graphic.graphic?.background).toBe("#0B4F3C");
-		// Long enough for six staggered cards to land and be read.
-		expect(graphic.endFrame).toBeGreaterThan(30 * 5);
+		expect(after.tracks[2].clips[0].graphic?.background).toBe("#0B4F3C");
+		// Behind the speaker it lasts as long as the footage, not just its own entrance.
+		expect(graphic.endFrame).toBe(300);
+	});
+
+	it("keeps a QR code up long enough to scan", async () => {
+		const start = timelineWith([footageClip()]);
+		const { api, commit } = fakeApi(start);
+		await createCreatorTools(api).add_graphic({ template: "qr", data: "https://rendr.app" });
+		const qr = committed(commit, start).tracks[0].clips[0];
+		expect(qr.endFrame - qr.startFrame).toBeGreaterThanOrEqual(30 * 8);
 	});
 
 	it("adds a QR code in front and restyles it in place", async () => {

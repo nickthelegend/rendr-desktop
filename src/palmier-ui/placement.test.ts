@@ -84,6 +84,15 @@ describe("snapFps", () => {
 });
 
 describe("adoptFootageFormat", () => {
+	it("never makes a project smaller than 1080 on its short edge", () => {
+		// A 360p stock clip keeps its 16:9 shape but not its resolution — captions
+		// and graphics drawn at 640×360 would come out soft.
+		const small = adoptFootageFormat(empty(), { ...phone, width: 640, height: 360, fps: 30 });
+		expect([small.width, small.height]).toEqual([1920, 1080]);
+		const tall = adoptFootageFormat(empty(), { ...phone, width: 540, height: 960 });
+		expect([tall.width, tall.height]).toEqual([1080, 1920]);
+	});
+
 	it("makes an empty default project vertical for vertical footage", () => {
 		const next = adoptFootageFormat(empty(), phone);
 		expect([next.width, next.height, next.fps]).toEqual([1080, 1920, 30]);

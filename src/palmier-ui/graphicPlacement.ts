@@ -63,7 +63,13 @@ export interface PlaceGraphicInput {
 export function placeGraphic(
 	timeline: TimelineModel,
 	input: PlaceGraphicInput,
-): { timeline: TimelineModel; clipId: string; trackId: string; movedBackgroundFrom?: string } {
+): {
+	timeline: TimelineModel;
+	clipId: string;
+	trackId: string;
+	movedBackgroundFrom?: string;
+	backdropClipId?: string;
+} {
 	let spec = input.spec;
 	const clip = (graphic: GraphicSpec) =>
 		withDefaults({
@@ -104,17 +110,26 @@ export function placeGraphic(
 	}
 
 	let movedBackgroundFrom: string | undefined;
+	let backdrop: ClipModel | null = null;
 	let tracks = timeline.tracks;
 	const background = under.clip.background;
 	if (background?.mode === "color" && background.color) {
-		if (!spec.background) spec = { ...spec, background: background.color };
+		// The colour has to come out from behind the speaker, or the graphic
+		// would be hidden under it. It moves onto a backdrop of its own spanning
+		// every clip of the footage that wore it — not onto this graphic, which
+		// may only last a few seconds and would leave the speaker on black.
+		const color = background.color;
+		const wearers = timeline.tracks[under.trackIndex].clips.filter(
+			(entry) => entry.background?.mode === "color" && entry.background.color === color,
+		);
 		movedBackgroundFrom = under.clip.id;
+		const ids = new Set(wearers.map((entry) => entry.id));
 		tracks = tracks.map((entry, index) =>
 			index === under.trackIndex
 				? {
 						...entry,
 						clips: entry.clips.map((existing) =>
-							existing.id === under.clip.id
+							ids.has(existing.id)
 								? {
 										...existing,
 										background: {
@@ -128,15 +143,35 @@ export function placeGraphic(
 					}
 				: entry,
 		);
+		backdrop = withDefaults({
+			id: `${input.id}-backdrop`,
+			name: "Backdrop",
+			mediaType: "graphic",
+			startFrame: Math.min(...wearers.map((entry) => entry.startFrame)),
+			endFrame: Math.max(...wearers.map((entry) => entry.endFrame)),
+			graphic: { template: "backdrop", elements: [], style: spec.style, background: color },
+		});
 	}
 	const placed = clip(spec);
 	const next = [...tracks];
-	// Index 0 is the top of the stack; directly below the footage is one further down.
+	// Index 0 is the top of the stack; directly below the footage is one further down,
+	// and the backdrop (when one was made) goes below the graphic.
 	next.splice(under.trackIndex + 1, 0, track([placed]));
+	if (backdrop) {
+		next.splice(under.trackIndex + 2, 0, {
+			id: `trk-graphic-${input.id}-backdrop`,
+			name: "Backdrop",
+			kind: "video",
+			muted: false,
+			hidden: false,
+			clips: [backdrop],
+		});
+	}
 	return {
 		timeline: { ...timeline, tracks: next },
 		clipId: placed.id,
 		trackId: `trk-graphic-${input.id}`,
 		movedBackgroundFrom,
+		backdropClipId: backdrop?.id,
 	};
 }

@@ -108,7 +108,7 @@ export const RECIPES: Recipe[] = [
 1. get_timeline, get_media, then analyze_footage on the footage (this makes the person matte and face track; it can take a minute — call it again if it says 'running').
 2. remove_background with mode 'color', color '${args.color ?? "#0B4F3C"}'.
 3. ${args.topics ? `Use these topics: ${args.topics}.` : "get_transcript and choose 4–7 short topic words (one or two words each) in the order they're discussed."}
-4. add_graphic template 'mind_map' with those nodes, linking related ideas. It goes BEHIND the speaker automatically and takes over the backdrop colour; cards are laid out around the speaker's face.${args.link ? `\n5. add_graphic template 'qr' with data '${args.link}', a short label like 'Scan me', in a corner away from the cards (add it before the mind map so the map avoids it).` : ""}
+${args.link ? `4. add_graphic template 'qr' with data '${args.link}' and a short label like 'Scan me', in a top corner. Add it BEFORE the mind map so the map lays out around it.\n` : ""}${args.link ? "5" : "4"}. add_graphic template 'mind_map' with those nodes, linking related ideas. It goes BEHIND the speaker automatically, lasts as long as the footage, and the backdrop colour moves to its own track beneath it; cards are laid out around the speaker's face.
 ${args.link ? "6" : "5"}. Ideally time each card to appear when it's first mentioned: use the transcript times and pass a custom 'at' per card (template 'custom') if the default stagger doesn't match.
 ${args.link ? "7" : "6"}. view_frame after the last card lands and check nothing covers the face.`,
 	},

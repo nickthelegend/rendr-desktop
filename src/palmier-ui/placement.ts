@@ -53,7 +53,12 @@ export function adoptFootageFormat(timeline: TimelineModel, asset: AssetModel): 
 		return timeline;
 	}
 
-	const scale = Math.min(1, 2160 / Math.min(asset.width, asset.height));
+	// The project takes the footage's shape, but never drops below 1080 on its
+	// short edge: a 360p stock clip shouldn't make a 360p project, and graphics
+	// and captions drawn at the project's size would come out soft. Above 4K is
+	// capped for the same reason in reverse.
+	const shortEdge = Math.min(asset.width, asset.height);
+	const scale = Math.min(2160 / shortEdge, Math.max(1, 1080 / shortEdge));
 	const even = (value: number) => Math.max(16, Math.round((value * scale) / 2) * 2);
 	const width = even(asset.width);
 	const height = even(asset.height);
