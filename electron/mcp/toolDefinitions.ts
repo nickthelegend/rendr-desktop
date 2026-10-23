@@ -2091,21 +2091,27 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
 		name: "normalize_audio",
 		description:
-			"Measures each clip's actual loudness and sets its level to match a target, so a demo doesn't jump in volume between a screen recording and a narration line.\n\nThe average is taken over the audible passages only — a take with thirty seconds of silence at the head is not quiet, and averaging the silence in would push the gain far too high.\n\nGain is held back rather than clipping: if reaching the target would push the peak past the ceiling, it goes as far as it can and reports the shortfall, because reaching a target by clipping the transients is not reaching it. Call with measureOnly to read the levels without changing anything.\n\nThis is unweighted program RMS, not ITU-R BS.1770, so the figures are not LUFS and are not labelled as such. For matching clips from the same capture, which is what this is for, that is the number that matters. Undoable.",
+			"Measures each clip's integrated loudness (ITU-R BS.1770-4 / EBU R128, in LUFS) and sets its level to hit a platform target, so the voice lands where YouTube, TikTok, Instagram or a podcast app will play it rather than being turned down — or left quiet — by the platform.\n\nTargets: -14 LUFS for YouTube, TikTok, Instagram Reels and Spotify (the default); -16 for podcasts (Apple Podcasts' spec); -23 for EBU broadcast.\n\nMeasured over the part of each source the timeline actually plays, K-weighted and gated (-70 LUFS absolute, -10 LU relative), so silence and pauses don't inflate the gain. Every cut of the same take is measured together and gets one shared level, so a jump-cut talking-head edit doesn't step in volume between cuts. The measurement is of the raw source, so the result is an absolute level: running it twice changes nothing the second time. Existing volume keyframes (a duck) are moved by the same amount, keeping their shape.\n\nGain stops at the true-peak ceiling rather than clipping. Rendr has no limiter, so a take whose peaks would cross the ceiling is left as loud as the ceiling allows, and the result says how far short it landed (resultLufs, shortfallDb). Normalise music beds separately — about 10 LU under the voice, e.g. -24 LUFS — then duck_audio. Call with measureOnly, or use measure_audio, to read the figures without changing anything. Undoable.",
 		inputSchema: object({
 			clipIds: {
 				type: "array",
 				items: { type: "string" },
 				description: "Clips to normalise. Omit for every clip that carries audio.",
 			},
+			targetLufs: {
+				type: "number",
+				description:
+					"Integrated loudness to aim for, in LUFS, between -40 and -5. Default -14 (YouTube, TikTok, Instagram, Spotify). Use -16 for podcasts, -23 for EBU broadcast.",
+			},
 			targetDb: {
 				type: "number",
 				description:
-					"Program level to aim for, in dBFS. Default -18, which leaves room for a narration line on top.",
+					"Deprecated alias for targetLufs, kept so older prompts still work. Read as LUFS.",
 			},
 			ceilingDb: {
 				type: "number",
-				description: "Peak must not cross this. Default -1.",
+				description:
+					"True-peak ceiling in dBTP, between -12 and 0. Default -1, the usual delivery ceiling; -2 leaves more room for lossy encoders. Gain never pushes the 4x-oversampled peak past it.",
 			},
 			measureOnly: {
 				type: "boolean",
@@ -2137,12 +2143,25 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
 		name: "duck_audio",
 		description:
-			"Drops a clip's level under the narration so speech stays intelligible over it — the mix problem every voiced demo has.\n\nBy default it ducks every clip that isn't narration, under every narration clip it finds, so a whole demo is balanced in one call. Pass clipIds to duck only those.\n\nWritten as volume keyframes rather than a separate audio stage, because those already drive both playback and the export mixdown: a duck is audible while scrubbing and present in the file, with no bake step. Each line gets four points — full, down, down, back up — because ramping is what stops a duck sounding like a gate. Lines closer together than two ramps duck once and stay down between them, so the bed doesn't pump.\n\nRun it again after re-narrating: it replaces the automation rather than layering more. Undoable.",
+			"Drops music and other beds under speech so the voice stays intelligible over them — the mix problem every voiced video has.\n\nTwo things to duck under. 'narration' ducks under the clips on the Narration track (narrate_timeline's TTS). 'speech' ducks under the creator's own voice in their footage: it listens to the camera audio (every clip on a video track, plus audio tracks named like a voice — Voice, Mic, Dialogue, VO), finds where someone is talking with a speech-band energy detector (pauses under 0.3 s bridged, clicks under 0.15 s ignored), and ducks the beds on the other audio tracks under exactly those spans, following each clip's trim and speed. 'auto' (the default) uses narration when there is any, otherwise speech — which is what a talking-head edit for YouTube, Shorts, Reels or TikTok wants.\n\nWritten as volume keyframes rather than a separate audio stage, because those already drive both playback and the export mixdown: a duck is audible while scrubbing and present in the file, with no bake step. Each span gets four points — full, down, down, back up — because ramping is what stops a duck sounding like a gate. Under speech the attack is short (0.15 s, so the bed is already down as the first word lands) and the release longer (0.6 s, so a breath between sentences doesn't swell the music); spans closer together than a release plus an attack duck once and stay down between them, so the bed doesn't pump.\n\nRun it again after re-narrating or re-cutting: it replaces the automation rather than layering more. Undoable.",
 		inputSchema: object({
+			under: {
+				type: "string",
+				enum: ["auto", "speech", "narration"],
+				description:
+					"What to duck under. 'speech': the voice detected in the footage's own audio. 'narration': the Narration track. 'auto' (default): narration if there is any, otherwise speech.",
+			},
 			clipIds: {
 				type: "array",
 				items: { type: "string" },
-				description: "Clips to duck. Omit to duck everything that isn't narration.",
+				description:
+					"Clips to duck. Omit to duck everything that isn't narration ('narration'), or every clip on an audio track that isn't a voice source ('speech').",
+			},
+			voiceClipIds: {
+				type: "array",
+				items: { type: "string" },
+				description:
+					"Speech mode only: the clips whose audio is the voice to listen to. Omit to use every unmuted video-track clip and voice-named audio track. Name them when b-roll with loud ambience would otherwise be read as talking.",
 			},
 			amountDb: {
 				type: "number",
@@ -2152,7 +2171,17 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 			rampFrames: {
 				type: "number",
 				description:
-					"Frames to ramp over, each side. Default 8 — about a quarter second at 30fps.",
+					"Frames to ramp over, each side, when attackFrames/releaseFrames aren't given. Default 8 under narration — about a quarter second at 30fps.",
+			},
+			attackFrames: {
+				type: "number",
+				description:
+					"Frames to ramp down over, ending as speech starts. Default 0.15 s worth under speech, rampFrames otherwise.",
+			},
+			releaseFrames: {
+				type: "number",
+				description:
+					"Frames to ramp back up over, starting when speech stops. Default 0.6 s worth under speech, rampFrames otherwise.",
 			},
 		}),
 	},
@@ -2750,16 +2779,30 @@ export const LOOK_TOOLS: AgentTool[] = [
 	{
 		name: "measure_audio",
 		description:
-			"Measure loudness without changing anything. Reports program level in dBFS — the average of the parts that are actually audible, ignoring silence — along with true peak, what fraction of the clip is above the silence floor, and the gain that would bring it to a target. These are the same numbers normalize_audio acts on, so this is how to see what it would do before it does it. Not LUFS: this is an unweighted program average, which tracks LUFS closely for speech but is not the broadcast measurement and should not be reported as one. A suggested gain is capped so the peak stays under −1 dBFS, and says so when the cap is what limited it.",
+			"Measure loudness without changing anything. Per clip: integrated loudness in LUFS (ITU-R BS.1770-4 / EBU R128 — K-weighted, gated at -70 LUFS and -10 LU, over the part of the source the clip plays; cuts of one take are measured together), playingLufs at the clip's current level, true peak in dBTP (a 4x-oversampled estimate), sample peak, the loudest 400 ms moment, how many seconds survived the gates, and the level that would bring it to a target without crossing the true-peak ceiling — the same numbers normalize_audio acts on.\n\nWhen no clipIds are given it also renders and measures the whole mix (mix.integratedLufs, mix.truePeakDbtp, mix.offTargetLu): that is the number YouTube, TikTok, Instagram and Spotify normalise against (-14 LUFS), and podcast apps (-16 LUFS).",
 		inputSchema: object({
 			clipIds: {
 				type: "array",
 				items: { type: "string" },
 				description: "Clips to measure. Omit for every audible clip on the timeline.",
 			},
+			targetLufs: {
+				type: "number",
+				description:
+					"Target integrated loudness in LUFS for the suggested gain. Default -14 (YouTube, TikTok, Instagram, Spotify); -16 for podcasts; -23 for EBU broadcast.",
+			},
 			targetDb: {
 				type: "number",
-				description: "Target program level in dBFS for the suggested gain. Default −16.",
+				description: "Deprecated alias for targetLufs. Read as LUFS.",
+			},
+			ceilingDb: {
+				type: "number",
+				description: "True-peak ceiling in dBTP for the suggested gain. Default -1.",
+			},
+			includeMix: {
+				type: "boolean",
+				description:
+					"Also render and measure the finished mix. Default true when clipIds is omitted, false otherwise.",
 			},
 		}),
 	},

@@ -14,9 +14,7 @@ import {
 	detectBeats,
 	detectSilence,
 	findSyncOffset,
-	measureLoudness,
 	measureNoiseFloor,
-	normalizationGainDb,
 	suggestedDenoiseStrength,
 } from "./analysis";
 import { decodeAudio, monoSamples } from "./audio";
@@ -71,8 +69,17 @@ import {
 	slotsFor,
 } from "./layout";
 import { findLook, freshLookId, type LookModel, sortLooks } from "./looks";
+import { type LoudnessMeasurement, loudnessGain, measureIntegratedLoudness } from "./loudness";
 import { folderChain, formatDuration, SUPPORTED_SUMMARY } from "./media";
-import { buildDuckPlan, encodeWavBytes, renderTimelineAudio } from "./mixdown";
+import {
+	buildDuckPlan,
+	clipSourceWindow,
+	type DuckSpan,
+	encodeWavBytes,
+	renderTimelineAudio,
+	sourceSpansToTimeline,
+	splitVoiceAndBeds,
+} from "./mixdown";
 import {
 	CLIP_LIMITS,
 	type ClipModel,
@@ -144,6 +151,7 @@ import {
 	planNarration,
 	voiceSupported,
 } from "./voice";
+import { detectSpeech } from "./voiceActivity";
 import {
 	DEFAULT_WEBCAM,
 	WEBCAM_LIMITS,
@@ -579,6 +587,81 @@ export function createAgentTools(api: EditorApi) {
 		// edit landing in the same tick isn't clobbered by a stale snapshot.
 		commit(label, (current) => (current === timeline ? next : reduce(current)));
 		return ok(receipt(next));
+	};
+
+	/**
+	 * BS.1770 loudness of the audio these clips play, one measurement per source.
+	 *
+	 * A talking-head edit is one long take cut into dozens of pieces. Measuring
+	 * each piece alone would give each its own gain, and a few tenths of a dB of
+	 * difference between neighbouring jump cuts is an audible step — so every
+	 * clip of one source is measured together, over just the stretches the
+	 * timeline plays, and they share the answer.
+	 */
+	const measureSourceLoudness = async (
+		clips: readonly ClipModel[],
+	): Promise<
+		Map<string, { measurement: LoudnessMeasurement; clipCount: number } | { reason: string }>
+	> => {
+		const groups = new Map<string, ClipModel[]>();
+		for (const clip of clips) {
+			const key = clip.assetId ?? "";
+			groups.set(key, [...(groups.get(key) ?? []), clip]);
+		}
+		const out = new Map<
+			string,
+			{ measurement: LoudnessMeasurement; clipCount: number } | { reason: string }
+		>();
+		for (const [assetId, group] of groups) {
+			const asset = state.assets.find((entry) => entry.id === assetId);
+			const decoded = asset && !asset.offline ? await decodeAudio(asset) : null;
+			if (!decoded) {
+				const reason = !asset
+					? "This clip has no asset."
+					: asset.offline
+						? "Media is offline — relink the file to measure it."
+						: "No decodable audio stream.";
+				for (const clip of group) out.set(clip.id, { reason });
+				continue;
+			}
+			const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) =>
+				decoded.getChannelData(index),
+			);
+			const ranges = group.map((clip): [number, number] => {
+				const [from, to] = clipSourceWindow(clip, timeline.fps);
+				return [Math.round(from * decoded.sampleRate), Math.round(to * decoded.sampleRate)];
+			});
+			const measurement = measureIntegratedLoudness(channels, decoded.sampleRate, ranges);
+			for (const clip of group) out.set(clip.id, { measurement, clipCount: group.length });
+		}
+		return out;
+	};
+
+	/**
+	 * Sets a clip's level and moves its volume keyframes by the same amount.
+	 *
+	 * Volume keyframes hold absolute levels and override volumeDb while they
+	 * exist, so changing the level alone would be silently ignored on a ducked
+	 * clip. Shifting them keeps the duck's shape at the new level.
+	 */
+	const setLevelKeepingAutomation = (
+		t: TimelineModel,
+		clip: ClipModel,
+		volumeDb: number,
+	): TimelineModel => {
+		const delta = volumeDb - clip.volumeDb;
+		const leveled = setClipNumber(t, [clip.id], "volumeDb", volumeDb);
+		const automation = clip.keyframes?.volumeDb;
+		if (!automation?.length || delta === 0) return leveled;
+		return setClipKeyframes(
+			leveled,
+			clip.id,
+			"volumeDb",
+			automation.map((keyframe) => ({
+				...keyframe,
+				values: [clampTo("volumeDb", (keyframe.values[0] ?? 0) + delta)],
+			})),
+		);
 	};
 
 	/**
@@ -2397,8 +2480,22 @@ export function createAgentTools(api: EditorApi) {
 		},
 
 		async normalize_audio(args) {
-			const targetDb = asNumber(args.targetDb) ?? -18;
+			// targetDb is the old name, from when this measured unweighted RMS;
+			// it is read as LUFS now rather than refused, so older prompts work.
+			const targetLufs = asNumber(args.targetLufs) ?? asNumber(args.targetDb) ?? -14;
 			const ceilingDb = asNumber(args.ceilingDb) ?? -1;
+			if (targetLufs > -5 || targetLufs < -40) {
+				return fail(
+					"invalid_argument",
+					"targetLufs must be between -40 and -5. -14 suits YouTube, TikTok, Instagram and Spotify; -16 suits podcasts; -23 is EBU broadcast.",
+				);
+			}
+			if (ceilingDb > 0 || ceilingDb < -12) {
+				return fail(
+					"invalid_argument",
+					"ceilingDb must be between -12 and 0 dBTP. -1 is the usual delivery ceiling; -2 leaves room for lossy encoders.",
+				);
+			}
 			const asked = asArray(args.clipIds).filter(
 				(value): value is string => typeof value === "string",
 			);
@@ -2420,47 +2517,75 @@ export function createAgentTools(api: EditorApi) {
 				);
 			}
 
+			const measurements = await measureSourceLoudness(targets);
 			const measured: Array<{
 				clipId: string;
-				programDb: number;
-				peakDb: number;
-				gainDb: number;
-				limitedBy: "peak" | null;
+				integratedLufs: number;
+				truePeakDb: number;
+				previousVolumeDb: number;
+				volumeDb: number;
+				resultLufs: number;
+				limitedBy: "truePeak" | "range" | null;
 				shortfallDb: number;
+				measuredWith: number;
 			}> = [];
+			const skipped: Array<{ clipId: string; reason: string }> = [];
 			for (const clip of targets) {
-				const asset = state.assets.find((entry) => entry.id === clip.assetId);
-				if (!asset) continue;
-				const buffer = await decodeAudio(asset);
-				if (!buffer) continue;
-				const profile = measureLoudness(monoSamples(buffer), buffer.sampleRate);
-				if (profile.activeRatio === 0) continue;
-				const gain = normalizationGainDb(profile, targetDb, ceilingDb);
+				const entry = measurements.get(clip.id);
+				if (!entry || "reason" in entry) {
+					skipped.push({ clipId: clip.id, reason: entry?.reason ?? "Not measured." });
+					continue;
+				}
+				const gain = loudnessGain(entry.measurement, targetLufs, ceilingDb);
+				if (!gain || entry.measurement.integratedLufs === null) {
+					skipped.push({
+						clipId: clip.id,
+						reason: "Silent throughout — there is no programme to measure.",
+					});
+					continue;
+				}
+				// The measurement is of the raw source, so the gain is the level
+				// itself, not an adjustment to whatever level the clip had — which
+				// is what makes running this twice a no-op instead of doubling up.
+				const volumeDb = clampTo("volumeDb", gain.gainDb);
+				const rangeCapped = volumeDb < gain.gainDb;
 				measured.push({
 					clipId: clip.id,
-					programDb: profile.programDb,
-					peakDb: profile.peakDb,
-					// The level it will end up at, relative to the clip's own.
-					gainDb: gain.gainDb,
-					limitedBy: gain.limitedBy,
-					shortfallDb: gain.shortfallDb,
+					integratedLufs: entry.measurement.integratedLufs,
+					truePeakDb: entry.measurement.truePeakDb,
+					previousVolumeDb: clip.volumeDb,
+					volumeDb,
+					resultLufs: Number((entry.measurement.integratedLufs + volumeDb).toFixed(2)),
+					limitedBy: rangeCapped ? "range" : gain.limitedBy,
+					shortfallDb: rangeCapped
+						? Number(
+								(targetLufs - entry.measurement.integratedLufs - volumeDb).toFixed(
+									2,
+								),
+							)
+						: gain.shortfallDb,
+					measuredWith: entry.clipCount,
 				});
 			}
 
 			if (measured.length === 0) {
 				return fail(
 					"decode_failed",
-					"Couldn't decode any of those clips, or they are silent throughout.",
+					`Couldn't measure any of those clips. ${skipped.map((entry) => `${entry.clipId}: ${entry.reason}`).join(" ")}`,
 				);
 			}
 
-			const held = measured.filter((entry) => entry.limitedBy === "peak");
+			const held = measured.filter((entry) => entry.limitedBy !== null);
+			const method =
+				"Integrated loudness per ITU-R BS.1770-4 (K-weighted, gated at -70 LUFS and -10 LU), over the part of each source the timeline plays. Cuts of the same take are measured together and share one level, so jump cuts don't step in volume. True peak is a 4x-oversampled estimate.";
 			if (args.measureOnly === true) {
 				return ok({
 					measureOnly: true,
 					clips: measured,
-					targetDb,
-					note: "Nothing was changed. programDb is unweighted program RMS over the audible passages, not LUFS.",
+					targetLufs,
+					ceilingDb,
+					...(skipped.length ? { skipped } : {}),
+					note: `Nothing was changed. ${method}`,
 				});
 			}
 
@@ -2470,23 +2595,20 @@ export function createAgentTools(api: EditorApi) {
 					measured.reduce((acc, entry) => {
 						const clip = findClip(acc, entry.clipId);
 						if (!clip) return acc;
-						return setClipNumber(
-							acc,
-							[entry.clipId],
-							"volumeDb",
-							clip.volumeDb + entry.gainDb,
-						);
+						return setLevelKeepingAutomation(acc, clip, entry.volumeDb);
 					}, t),
 				() => ({
 					normalized: measured.length,
-					targetDb,
+					targetLufs,
+					ceilingDb,
 					clips: measured,
+					...(skipped.length ? { skipped } : {}),
 					...(held.length
 						? {
-								warning: `${held.length} ${held.length === 1 ? "clip" : "clips"} couldn't reach the target without clipping, so ${held.length === 1 ? "it was" : "they were"} left as loud as the ceiling allows. Lower targetDb, or accept the shortfall.`,
+								warning: `${held.length} ${held.length === 1 ? "clip" : "clips"} couldn't reach ${targetLufs} LUFS: ${held.some((entry) => entry.limitedBy === "truePeak") ? `its peaks would cross the ${ceilingDb} dBTP ceiling, and Rendr has no limiter, so the gain stopped there rather than clipping` : "the gain needed is beyond the +15 dB a clip level allows"}. resultLufs says where each one landed. A lower target, or a higher ceiling, closes the gap.`,
 							}
 						: {}),
-					note: "Levels measured over the audible passages only, so silence at the head didn't inflate the gain.",
+					note: `${method} Volume keyframes (a duck, say) moved by the same amount, so their shape was kept. Normalise music beds separately, about 10 LU under the voice (e.g. -24 LUFS), then duck_audio.`,
 				}),
 			);
 		},
@@ -2556,46 +2678,129 @@ export function createAgentTools(api: EditorApi) {
 			);
 		},
 
-		duck_audio(args) {
+		async duck_audio(args) {
 			const amountDb = asNumber(args.amountDb) ?? -12;
-			const rampFrames = asNumber(args.rampFrames) ?? 8;
+			const rampFrames = asNumber(args.rampFrames);
 			if (amountDb >= 0) {
 				return fail(
 					"invalid_argument",
 					"amountDb must be negative — ducking lowers a level. -12 keeps a bed audible under speech.",
 				);
 			}
-
-			// The narration track is what everything else ducks under.
-			const narration = timeline.tracks.find((track) => track.name === "Narration");
-			const spans = (narration?.clips ?? []).map((clip) => ({
-				startFrame: clip.startFrame,
-				endFrame: clip.endFrame,
-			}));
-			if (spans.length === 0) {
-				return fail(
-					"nothing_to_duck_under",
-					"There is no narration to duck under. Run narrate_timeline first, or set levels directly with set_clip_properties.",
-				);
+			const under = asString(args.under) ?? "auto";
+			if (under !== "auto" && under !== "narration" && under !== "speech") {
+				return fail("invalid_argument", "under must be 'narration', 'speech' or 'auto'.");
 			}
-
 			const asked = asArray(args.clipIds).filter(
 				(value): value is string => typeof value === "string",
 			);
-			const candidates = timeline.tracks
-				.filter((track) => track.name !== "Narration")
-				.flatMap((track) => track.clips)
-				.filter((clip) => clip.mediaType !== "text")
-				.filter((clip) => (asked.length === 0 ? true : asked.includes(clip.id)));
 
+			// The narration track is what everything else ducks under when there
+			// is one; a talking-head edit has none, and ducks under the voice in
+			// its own footage instead.
+			const narration = timeline.tracks.find((track) => track.name === "Narration");
+			const narrationSpans = (narration?.clips ?? []).map((clip) => ({
+				startFrame: clip.startFrame,
+				endFrame: clip.endFrame,
+			}));
+			const mode =
+				under === "auto" ? (narrationSpans.length > 0 ? "narration" : "speech") : under;
+			if (mode === "narration" && narrationSpans.length === 0) {
+				return fail(
+					"nothing_to_duck_under",
+					"There is no narration to duck under. Run narrate_timeline first, pass under: 'speech' to duck under the voice in the footage, or set levels directly with set_clip_properties.",
+				);
+			}
+
+			let spans: DuckSpan[];
+			let candidates: ClipModel[];
+			const listenedTo: string[] = [];
+			if (mode === "narration") {
+				spans = narrationSpans;
+				candidates = timeline.tracks
+					.filter((track) => track.name !== "Narration")
+					.flatMap((track) => track.clips)
+					.filter((clip) => clip.mediaType !== "text")
+					.filter((clip) => (asked.length === 0 ? true : asked.includes(clip.id)));
+			} else {
+				const split = splitVoiceAndBeds(timeline, {
+					voiceClipIds: stringList(args.voiceClipIds),
+					bedClipIds: asked,
+				});
+				candidates = split.beds;
+				spans = [];
+				for (const voice of split.voices) {
+					const asset = state.assets.find((entry) => entry.id === voice.assetId);
+					if (!asset || asset.offline || asset.hasAudio === false) continue;
+					const decoded = await decodeAudio(asset);
+					if (!decoded) continue;
+					// Only the stretch the clip plays: speech in a trimmed-off head
+					// mustn't duck music under some other clip.
+					const [from, to] = clipSourceWindow(voice, timeline.fps);
+					const samples = monoSamples(decoded).subarray(
+						Math.max(0, Math.floor(from * decoded.sampleRate)),
+						Math.ceil(to * decoded.sampleRate),
+					);
+					const offset =
+						Math.max(0, Math.floor(from * decoded.sampleRate)) / decoded.sampleRate;
+					const speech = detectSpeech(samples, decoded.sampleRate).map(
+						([start, end]): [number, number] => [start + offset, end + offset],
+					);
+					spans.push(...sourceSpansToTimeline(voice, speech, timeline.fps));
+					listenedTo.push(voice.id);
+				}
+				if (listenedTo.length === 0) {
+					return fail(
+						"nothing_to_duck_under",
+						"There is no audible voice to duck under — no unmuted footage or voice track with decodable audio. Name the clips that carry the voice with voiceClipIds.",
+					);
+				}
+				if (spans.length === 0) {
+					return fail(
+						"no_speech_found",
+						`No speech was detected in ${listenedTo.join(", ")}. If the voice is on another clip, name it with voiceClipIds.`,
+					);
+				}
+				if (candidates.length === 0) {
+					return fail(
+						"nothing_to_duck",
+						"There is no music or bed to duck: every clip with audio is a voice source. Pass clipIds to name the bed.",
+					);
+				}
+			}
+
+			// Under a voice the bed should clear out quickly before a word and come
+			// back unhurriedly after the phrase, so a breath doesn't swell it.
+			const attackFrames =
+				asNumber(args.attackFrames) ??
+				rampFrames ??
+				(mode === "speech" ? Math.max(1, Math.round(timeline.fps * 0.15)) : 8);
+			const releaseFrames =
+				asNumber(args.releaseFrames) ??
+				rampFrames ??
+				(mode === "speech" ? Math.max(1, Math.round(timeline.fps * 0.6)) : 8);
 			const plans = candidates
-				.map((clip) => buildDuckPlan(clip, spans, { amountDb, rampFrames }))
+				.map((clip) =>
+					buildDuckPlan(clip, spans, {
+						amountDb,
+						rampFrames: rampFrames ?? undefined,
+						attackFrames,
+						releaseFrames,
+						// Detected phrases are already bridged across pauses, so a
+						// short one is still a real line worth ducking under.
+						...(mode === "speech"
+							? { minSpanFrames: Math.round(timeline.fps * 0.2) }
+							: {}),
+					}),
+				)
 				.filter((plan): plan is NonNullable<typeof plan> => plan !== null);
 
 			if (plans.length === 0) {
 				return fail(
 					"nothing_to_duck",
-					"Nothing overlaps the narration for long enough to duck. A line has to be longer than two ramps to hold a level.",
+					mode === "speech"
+						? "No music or bed overlaps the detected speech. Check the bed sits under the talking, or pass clipIds."
+						: "Nothing overlaps the narration for long enough to duck. A line has to be longer than two ramps to hold a level.",
 				);
 			}
 
@@ -2626,10 +2831,28 @@ export function createAgentTools(api: EditorApi) {
 						clipId: plan.clipId,
 						points: plan.rows.length,
 					})),
+					under: mode,
 					amountDb,
-					rampFrames,
-					underNarrationLines: spans.length,
-					note: "Written as volume keyframes, so it is audible while scrubbing and present in the export with no bake step.",
+					attackFrames,
+					releaseFrames,
+					...(mode === "narration"
+						? { underNarrationLines: spans.length }
+						: {
+								speechSpans: spans.length,
+								speechSeconds: Number(
+									(
+										spans.reduce(
+											(sum, span) => sum + span.endFrame - span.startFrame,
+											0,
+										) / timeline.fps
+									).toFixed(1),
+								),
+								listenedTo,
+							}),
+					note:
+						mode === "speech"
+							? "Ducked under the speech detected in the footage's own audio (speech-band energy, with pauses under 0.3 s bridged). Written as volume keyframes, so it is audible while scrubbing and present in the export. Re-run after re-cutting the footage: the duck follows where the speech was when this ran."
+							: "Written as volume keyframes, so it is audible while scrubbing and present in the export with no bake step.",
 				}),
 			);
 		},
@@ -5788,7 +6011,9 @@ export function createAgentTools(api: EditorApi) {
 		},
 
 		async measure_audio(args) {
-			const target = asNumber(args.targetDb) ?? -16;
+			// targetDb is the pre-LUFS name, still honoured.
+			const target = asNumber(args.targetLufs) ?? asNumber(args.targetDb) ?? -14;
+			const ceilingDb = asNumber(args.ceilingDb) ?? -1;
 			const asked = stringList(args.clipIds);
 			const audible = timeline.tracks
 				.flatMap((track) => track.clips.map((clip) => ({ track, clip })))
@@ -5808,65 +6033,106 @@ export function createAgentTools(api: EditorApi) {
 					note: "Nothing to measure — no unmuted audio or video clips matched.",
 				});
 
+			const measurements = await measureSourceLoudness(audible.map(({ clip }) => clip));
 			const rows: Array<Record<string, unknown>> = [];
 			for (const { track, clip } of audible) {
-				const asset = state.assets.find((entry) => entry.id === clip.assetId);
-				if (!asset || asset.offline) {
+				const entry = measurements.get(clip.id);
+				if (!entry || "reason" in entry) {
 					rows.push({
 						clipId: clip.id,
 						name: clip.name,
 						measured: false,
-						reason: asset
-							? "Media is offline — relink the file to measure it."
-							: "This clip has no asset.",
+						reason: entry?.reason ?? "Not measured.",
 					});
 					continue;
 				}
-				const decoded = await decodeAudio(asset);
-				if (!decoded) {
-					rows.push({
-						clipId: clip.id,
-						name: clip.name,
-						measured: false,
-						reason: "No decodable audio stream.",
-					});
-					continue;
-				}
-				const samples = monoSamples(decoded);
-				const loudness = measureLoudness(samples, decoded.sampleRate);
-				const suggestion = normalizationGainDb(loudness, target);
+				const { measurement } = entry;
+				const suggestion = loudnessGain(measurement, target, ceilingDb);
 				rows.push({
 					clipId: clip.id,
 					name: clip.name,
 					trackName: track.name,
-					programDb: Number(loudness.programDb.toFixed(1)),
-					peakDbfs: Number(loudness.peakDb.toFixed(1)),
-					activeRatio: Number(loudness.activeRatio.toFixed(2)),
-					currentGainDb: clip.volumeDb,
-					suggestedGainDb: Number(suggestion.gainDb.toFixed(1)),
-					...(suggestion.limitedBy === "peak"
+					integratedLufs: measurement.integratedLufs,
+					// What it sounds like at its current level, keyframes aside.
+					...(measurement.integratedLufs !== null
 						? {
-								limitedBy: "peak",
-								shortfallDb: Number(suggestion.shortfallDb.toFixed(1)),
+								playingLufs: Number(
+									(measurement.integratedLufs + clip.volumeDb).toFixed(1),
+								),
 							}
 						: {}),
+					truePeakDbtp: measurement.truePeakDb,
+					samplePeakDbfs: measurement.samplePeakDb,
+					maxMomentaryLufs: measurement.maxMomentaryLufs,
+					speechSeconds: measurement.gatedSeconds,
+					measuredSeconds: measurement.measuredSeconds,
+					...(entry.clipCount > 1 ? { measuredWithOtherCuts: entry.clipCount - 1 } : {}),
+					currentGainDb: clip.volumeDb,
+					...(suggestion
+						? {
+								suggestedGainDb: Number(
+									clampTo("volumeDb", suggestion.gainDb).toFixed(1),
+								),
+								...(suggestion.limitedBy
+									? {
+											limitedBy: suggestion.limitedBy,
+											shortfallDb: suggestion.shortfallDb,
+										}
+									: {}),
+							}
+						: { note: "Silent throughout — nothing passed the -70 LUFS gate." }),
 					measured: true,
 				});
 			}
 
-			const measured = rows.filter((row) => row.measured);
-			const spread = measured.length
-				? Math.max(...measured.map((row) => row.programDb as number)) -
-					Math.min(...measured.map((row) => row.programDb as number))
-				: 0;
+			const playing = rows
+				.map((row) => row.playingLufs)
+				.filter((value): value is number => typeof value === "number");
+			const spread = playing.length > 1 ? Math.max(...playing) - Math.min(...playing) : 0;
+
+			// What a platform actually measures is the finished mix — voice, bed,
+			// ducks and all — so report that too unless only some clips were asked about.
+			let mix: Record<string, unknown> | undefined;
+			if (args.includeMix === true || (args.includeMix !== false && asked.length === 0)) {
+				try {
+					const rendered = await renderTimelineAudio(
+						timeline,
+						state.assets,
+						computeTotalFrames(timeline),
+					);
+					if (rendered) {
+						const channels = Array.from(
+							{ length: rendered.numberOfChannels },
+							(_, index) => rendered.getChannelData(index),
+						);
+						const measured = measureIntegratedLoudness(channels, rendered.sampleRate);
+						mix = {
+							integratedLufs: measured.integratedLufs,
+							truePeakDbtp: measured.truePeakDb,
+							...(measured.integratedLufs !== null
+								? {
+										offTargetLu: Number(
+											(measured.integratedLufs - target).toFixed(1),
+										),
+									}
+								: {}),
+						};
+					}
+				} catch {
+					mix = { measured: false, reason: "The mix couldn't be rendered here." };
+				}
+			}
+
 			return ok({
 				clips: rows,
-				targetDb: target,
-				...(measured.length > 1 ? { loudnessSpreadDb: Number(spread.toFixed(1)) } : {}),
+				targetLufs: target,
+				ceilingDb,
+				...(mix ? { mix } : {}),
+				...(playing.length > 1 ? { loudnessSpreadLu: Number(spread.toFixed(1)) } : {}),
 				note:
-					spread > 6
-						? `These clips vary by ${spread.toFixed(1)} dB, which is audible as a jump between them. normalize_audio evens it out.`
-						: "Nothing was changed. normalize_audio applies the suggested gains.",
+					spread > 3
+						? `These clips play ${spread.toFixed(1)} LU apart, which is audible as a jump between them. normalize_audio evens it out.`
+						: "Nothing was changed. normalize_audio applies the suggested gains. Loudness is ITU-R BS.1770-4 integrated (LUFS); true peak is a 4x-oversampled estimate.",
 			});
 		},
 
