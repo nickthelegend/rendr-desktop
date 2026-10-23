@@ -388,3 +388,57 @@ describe("find_retakes", () => {
 		expect(payload(result).error).toBe("no_transcript");
 	});
 });
+
+describe("caption presets on small canvases", () => {
+	it("scales a preset's point sizes to the timeline's short edge", async () => {
+		const { scalePresetToCanvas } = await import("./agentTools");
+		const preset = { fontSize: 88, strokeWidth: 7, color: "#fff" } as Parameters<
+			typeof scalePresetToCanvas
+		>[0];
+		expect(scalePresetToCanvas(preset, { width: 640, height: 360 })).toMatchObject({
+			fontSize: 29.3,
+			strokeWidth: 2.3,
+			color: "#fff",
+		});
+		// A 9:16 Short has a 1080 short edge: untouched.
+		expect(scalePresetToCanvas(preset, { width: 1080, height: 1920 })).toBe(preset);
+	});
+});
+
+describe("punch-ins on a face-followed clip", () => {
+	it("pushes in along the follow path and restores it exactly", async () => {
+		const path = [
+			{ frame: 0, values: [-1, 0], interp: "smooth" as const },
+			{ frame: 60, values: [-2, 0], interp: "smooth" as const },
+		];
+		const followed = footageClip({
+			id: "s1",
+			startFrame: 60,
+			endFrame: 180,
+			faceFollow: true,
+			transform: { ...footageClip().transform, width: 3.16, centerX: 0.5 - 1 + 1.58 },
+			keyframes: { position: path },
+		});
+		const start = timelineWith([
+			footageClip({ id: "s0", startFrame: 0, endFrame: 60 }),
+			followed,
+		]);
+		const assets = [
+			{ id: "asset-cam", type: "video", width: 1920, height: 1080, url: "blob:x" },
+		];
+		const first = fakeApi(start, assets);
+		const result = await createCreatorTools(first.api).add_punch_ins({ amount: 1.2 });
+		expect(payload(result).skipped).toBeUndefined();
+		const pushed = committed(first.commit, start).tracks[0].clips[1];
+		expect(pushed.transform.width).toBeCloseTo(3.16 * 1.2);
+		expect(pushed.keyframes?.position).toHaveLength(2);
+		expect(pushed.punch?.basePosition).toEqual(path);
+
+		const second = fakeApi(committed(first.commit, start), assets);
+		await createCreatorTools(second.api).add_punch_ins({ mode: "off" });
+		const restored = committed(second.commit, committed(first.commit, start)).tracks[0]
+			.clips[1];
+		expect(restored.keyframes?.position).toEqual(path);
+		expect(restored.transform.width).toBeCloseTo(3.16);
+	});
+});

@@ -349,7 +349,7 @@ describe("reframe_timeline", () => {
 		}));
 		const { api, commit } = fakeApi(timeline, {
 			state: {
-				assets: [landscape],
+				assets: [{ ...landscape, fromRecording: true, hasCursorTelemetry: true }],
 				timelines: [timeline],
 				cursorTelemetry: telemetry,
 				comments: [],
@@ -369,6 +369,30 @@ describe("reframe_timeline", () => {
 		const pointer = box.left + 0.1 * box.width;
 		expect(pointer).toBeGreaterThanOrEqual(0);
 		expect(pointer).toBeLessThanOrEqual(1);
+	});
+
+	it("doesn't pan camera footage along a project's screen-recording cursor", () => {
+		// Telemetry is kept per project; a camera take in the same project was
+		// never under that pointer and must not follow it.
+		const timeline = timelineWith([footage()]);
+		const telemetry = Array.from({ length: 80 }, (_, i) => ({
+			timeMs: i * 50,
+			cx: 0.1,
+			cy: 0.5,
+		}));
+		const { api, commit } = fakeApi(timeline, {
+			state: {
+				assets: [landscape],
+				timelines: [timeline],
+				cursorTelemetry: telemetry,
+				comments: [],
+				workflows: [],
+			},
+		});
+		const result = createAgentTools(api).reframe_timeline({ aspect: "9:16" });
+		expect(body(result).followingCursor).toBe(false);
+		const clip = committed(commit, timeline).tracks[0].clips[0];
+		expect(clip.keyframes?.position).toBeUndefined();
 	});
 
 	it("leaves captions alone", () => {

@@ -238,7 +238,14 @@ export interface ClipModel {
 	punch?: {
 		base: { centerX: number; centerY: number; width: number; height: number };
 		factor: number;
+		/** A face-follow path as it was before the push, to restore it exactly. */
+		basePosition?: KeyframeTracks["position"];
 	};
+	/**
+	 * Set when Rendr's reframe made the position keyframes to follow the
+	 * speaker's face, so later tools know the motion is Rendr's, not authored.
+	 */
+	faceFollow?: boolean;
 
 	/** Graphic clips only: the drawn elements and how they enter (graphics.ts). */
 	graphic?: GraphicSpec;

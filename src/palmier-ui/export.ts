@@ -164,6 +164,12 @@ export interface DecodedSources {
 	frames?: Map<string, FrameSource>;
 	/** Footage asset id → its person matte's asset id, for background removal. */
 	mattes?: Map<string, string>;
+	/**
+	 * Takes that carry cursor telemetry. The project keeps one pointer path,
+	 * and it belongs to its screen recordings: drawn over camera footage it is
+	 * a mouse pointer floating over somebody's face.
+	 */
+	cursorTakes?: Set<string>;
 }
 
 export async function decodeSources(assets: readonly AssetModel[]): Promise<DecodedSources> {
@@ -206,7 +212,11 @@ export async function decodeSources(assets: readonly AssetModel[]): Promise<Deco
 			mattes.set(asset.id, asset.matteAssetId);
 	}
 
-	return { video, image, mattes };
+	const cursorTakes = new Set(
+		assets.filter((asset) => asset.hasCursorTelemetry).map((asset) => asset.id),
+	);
+
+	return { video, image, mattes, cursorTakes };
 }
 
 /** Seeks a video and waits for the frame to actually be ready. */
@@ -542,7 +552,11 @@ export async function renderFrame(
 	// The drawn pointer sits inside the camera transform, so a punch-in
 	// magnifies it exactly as it magnifies the picture — the same as the preview.
 	if (cursor && cursor.telemetry.length > 0) {
-		const host = visible.find((clip) => clip.mediaType === "video");
+		const host = visible.find(
+			(clip) =>
+				clip.mediaType === "video" &&
+				(!sources.cursorTakes || sources.cursorTakes.has(clip.assetId ?? "")),
+		);
 		const resolved = host
 			? resolveCursor(
 					cursor.telemetry,

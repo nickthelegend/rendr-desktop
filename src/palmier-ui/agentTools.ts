@@ -399,6 +399,26 @@ const CAPTION_LOOK_RESET: TextStylePatch = {
 	backgroundRadius: undefined,
 };
 
+/**
+ * Preset sizes are authored for a 1080 short edge. Text sizes are canvas
+ * points, so on a smaller canvas (a 720p project, a 360p draft) the same
+ * numbers would fill the frame — the preset's look is kept by scaling its
+ * point sizes to the timeline's short edge.
+ */
+export function scalePresetToCanvas(
+	preset: TextStylePatch,
+	timeline: { width: number; height: number },
+): TextStylePatch {
+	const factor = Math.min(timeline.width, timeline.height) / 1080;
+	if (Math.abs(factor - 1) < 0.01) return preset;
+	const scaled: Record<string, unknown> = { ...preset };
+	for (const key of ["fontSize", "strokeWidth", "shadowBlur", "shadowOffsetX", "shadowOffsetY"]) {
+		const value = scaled[key];
+		if (typeof value === "number") scaled[key] = Math.round(value * factor * 10) / 10;
+	}
+	return scaled as TextStylePatch;
+}
+
 const CAPTION_PRESETS: Record<string, TextStylePatch> = {
 	// Each word lights as it is said. The default, because it is the one that
 	// makes a caption readable as speech rather than as a wall of text.
@@ -2957,8 +2977,22 @@ export function createAgentTools(api: EditorApi) {
 			}
 
 			// Following is the point of a vertical crop of a screen recording, so
-			// it is on whenever there is telemetry to follow.
-			const follow = args.followCursor !== false && state.cursorTelemetry.length > 0;
+			// it is on whenever there is telemetry to follow — but only for the
+			// recordings themselves. Telemetry is kept per project, and camera
+			// footage in the same project must not pan along a mouse path that
+			// was never in it; with a face track, reframeTimeline frames the face.
+			const cursorTakes = new Set(
+				state.assets
+					.filter(
+						(asset) =>
+							asset.fromRecording && asset.hasCursorTelemetry && !asset.faceTrack,
+					)
+					.map((asset) => asset.id),
+			);
+			const follow =
+				args.followCursor !== false &&
+				state.cursorTelemetry.length > 0 &&
+				visual.some((clip) => clip.assetId && cursorTakes.has(clip.assetId));
 
 			// The active timeline is reframed in place, canvas and all, as one
 			// undoable step. A variant would leave every later edit — captions,
@@ -2973,7 +3007,13 @@ export function createAgentTools(api: EditorApi) {
 					return reframed.tracks
 						.filter((track) => track.kind === "video")
 						.flatMap((track) => track.clips)
-						.filter((clip) => clip.mediaType !== "text" && clip.mediaType !== "audio")
+						.filter(
+							(clip) =>
+								clip.mediaType !== "text" &&
+								clip.mediaType !== "audio" &&
+								clip.assetId !== undefined &&
+								cursorTakes.has(clip.assetId),
+						)
 						.reduce((acc, clip) => {
 							// Only footage wider than the frame has anywhere to pan;
 							// followKeyframes returns nothing for the rest.
@@ -7525,7 +7565,7 @@ export function createAgentTools(api: EditorApi) {
 					);
 				// Preset underneath, explicit arguments on top — so a caller can
 				// take a whole look and still override one thing about it.
-				applied = { ...preset, ...patch };
+				applied = { ...scalePresetToCanvas(preset, timeline), ...patch };
 			}
 			if (Object.keys(applied).length === 0 && perCaption === null)
 				return fail(

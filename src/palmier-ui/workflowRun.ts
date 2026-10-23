@@ -23,7 +23,7 @@ import type { CommentModel } from "./comments";
 import { boxSizeAt, positionRow } from "./keyframes";
 import type { AssetModel } from "./media";
 import { type ClipModel, type Transform, withDefaults, type ZoomRegionModel } from "./model";
-import { clipFace, frameFace } from "./punchIns";
+import { clipFace, faceFollowKeyframes, frameFace } from "./punchIns";
 import { splitAt, type TimelineModel } from "./reducers";
 import { nodeLabel, runOrder, type WorkflowModel, type WorkflowNode } from "./workflow";
 
@@ -213,6 +213,26 @@ export function reframeTimeline(
 				timeline.fps,
 			);
 			if (face) to = frameFace(to, face, picture, canvasAspect, { x: 0.5, y: 0.38 });
+			// A speaker who moves gets a crop that follows them — but only where
+			// no motion was authored, which remapMotion is about to carry over.
+			if (face && !clip.keyframes?.position?.length) {
+				const follow = faceFollowKeyframes(
+					clip,
+					to,
+					assets.find((asset) => asset.id === clip.assetId),
+					timeline.fps,
+					picture,
+					canvasAspect,
+				);
+				if (follow.length > 0) {
+					return {
+						...clip,
+						transform: { ...clip.transform, ...to },
+						keyframes: { ...(remapMotion(clip, from, to) ?? {}), position: follow },
+						faceFollow: true,
+					};
+				}
+			}
 		} else {
 			const width = from.width * keepX;
 			const height = from.height * keepY;

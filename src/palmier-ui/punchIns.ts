@@ -14,7 +14,7 @@
 import type { Keyframe } from "./keyframes";
 import type { AssetModel } from "./media";
 import type { ClipModel, Transform } from "./model";
-import { typicalFace } from "./vision";
+import { faceAt, typicalFace } from "./vision";
 
 export interface Box {
 	centerX: number;
@@ -157,5 +157,76 @@ export function clipFace(
 	const from = clip.trimStartFrame / fps;
 	const to = (clip.trimStartFrame + (clip.endFrame - clip.startFrame) * clip.speed) / fps;
 	const face = typicalFace(asset.faceTrack, from, to);
+	return face ? { x: face.cx, y: face.cy } : null;
+}
+
+/**
+ * Keyframes that keep a moving speaker in a tight crop — a vertical crop of
+ * wide footage shows a third of the picture, and people lean, step and turn.
+ *
+ * A camera operator doesn't chase every movement: the crop holds still while
+ * the face stays in its middle, and pans — smoothly, over about half a second —
+ * only when the face drifts toward an edge. Returns [] when one framing holds
+ * the whole clip, which is the usual case for someone sitting at a desk.
+ * Rows are top-left corners, as keyframes.ts expects.
+ */
+export function faceFollowKeyframes(
+	clip: ClipModel,
+	box: Box,
+	asset: AssetModel | undefined,
+	fps: number,
+	pictureAspect: number,
+	canvasAspect: number,
+	options: { deadZone?: number; panFrames?: number; target?: { x: number; y: number } } = {},
+): Keyframe[] {
+	if (!asset?.faceTrack || (box.width <= 1.001 && box.height <= 1.001)) return [];
+	const deadZone = options.deadZone ?? 0.16;
+	const panFrames = Math.max(4, Math.round(options.panFrames ?? fps * 0.5));
+	const target = options.target ?? { x: 0.5, y: 0.38 };
+	const span = clip.endFrame - clip.startFrame;
+	const sourceAt = (local: number) => (clip.trimStartFrame + local * clip.speed) / fps;
+
+	const corner = (framed: Box) => [
+		framed.centerX - framed.width / 2,
+		framed.centerY - framed.height / 2,
+	];
+	const keys: Keyframe[] = [];
+	let current: Box | null = null;
+	const step = Math.max(1, Math.round(fps * 0.2));
+	for (let local = 0; local < span; local += step) {
+		const point = faceAtSource(asset.faceTrack, sourceAt(local));
+		if (!point) continue;
+		if (!current) {
+			current = frameFace(box, point, pictureAspect, canvasAspect, target);
+			keys.push({ frame: 0, values: corner(current), interp: "smooth" });
+			continue;
+		}
+		const onScreen = faceInFrame(current, point, pictureAspect, canvasAspect);
+		if (
+			Math.abs(onScreen.x - target.x) <= deadZone &&
+			Math.abs(onScreen.y - target.y) <= deadZone * 1.5
+		) {
+			continue;
+		}
+		const next = frameFace(current, point, pictureAspect, canvasAspect, target);
+		// Hold where we were until the pan starts, then ease to the new framing.
+		const start = Math.max((keys[keys.length - 1]?.frame ?? 0) + 1, local - panFrames);
+		keys.push({ frame: start, values: corner(current), interp: "smooth" });
+		keys.push({
+			frame: Math.min(span - 1, start + panFrames),
+			values: corner(next),
+			interp: "smooth",
+		});
+		current = next;
+	}
+	// One keyframe is a static framing, which the transform already expresses.
+	return keys.length > 1 ? keys : [];
+}
+
+function faceAtSource(
+	track: NonNullable<AssetModel["faceTrack"]>,
+	seconds: number,
+): { x: number; y: number } | null {
+	const face = faceAt(track, seconds, 0.6);
 	return face ? { x: face.cx, y: face.cy } : null;
 }

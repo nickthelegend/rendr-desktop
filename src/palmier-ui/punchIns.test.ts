@@ -129,3 +129,66 @@ describe("face-centred reframing", () => {
 		expect(box.centerX - box.width / 2).toBeLessThanOrEqual(0);
 	});
 });
+
+describe("face-follow", () => {
+	const wide = { centerX: 0.5, centerY: 0.5, width: 16 / 9 / (9 / 16), height: 1 };
+	const clipOf = async (endFrame = 300) => {
+		const { withDefaults } = await import("./model");
+		return withDefaults({
+			id: "c",
+			name: "cam",
+			mediaType: "video",
+			assetId: "a",
+			startFrame: 0,
+			endFrame,
+		});
+	};
+	const assetWith = (positions: Array<[number, number]>) => ({
+		id: "a",
+		name: "cam",
+		type: "video" as const,
+		durationSeconds: 10,
+		width: 1920,
+		height: 1080,
+		hasAudio: true,
+		url: "blob:a",
+		faceTrack: {
+			width: 1920,
+			height: 1080,
+			duration: 10,
+			interval: 0.2,
+			samples: positions.map(([t, x]) => ({
+				t,
+				faces: [{ x: x - 0.05, y: 0.25, w: 0.1, h: 0.2, confidence: 0.9 }],
+			})),
+		},
+	});
+
+	it("holds still for a speaker who stays put", async () => {
+		const { faceFollowKeyframes } = await import("./punchIns");
+		const still = assetWith(
+			Array.from(
+				{ length: 50 },
+				(_, i) => [i * 0.2, 0.4 + (i % 2) * 0.01] as [number, number],
+			),
+		);
+		expect(faceFollowKeyframes(await clipOf(), wide, still, 30, 16 / 9, 9 / 16)).toEqual([]);
+	});
+
+	it("pans, smoothly, when the speaker moves across the frame", async () => {
+		const { faceFollowKeyframes } = await import("./punchIns");
+		// Left for four seconds, then steps right.
+		const moving = assetWith(
+			Array.from({ length: 50 }, (_, i) => [i * 0.2, i < 20 ? 0.3 : 0.7] as [number, number]),
+		);
+		const keys = faceFollowKeyframes(await clipOf(), wide, moving, 30, 16 / 9, 9 / 16);
+		expect(keys.length).toBeGreaterThanOrEqual(3);
+		// A hold, then a pan of about half a second to the new framing.
+		const [, hold, arrive] = keys;
+		expect(arrive.frame - hold.frame).toBeGreaterThanOrEqual(14);
+		expect(arrive.values[0]).toBeLessThan(hold.values[0]);
+		// The face ends up near the middle of the crop.
+		const box = { ...wide, centerX: arrive.values[0] + wide.width / 2 };
+		expect(faceInFrame(box, { x: 0.7, y: 0.35 }, 16 / 9, 9 / 16).x).toBeCloseTo(0.5, 1);
+	});
+});

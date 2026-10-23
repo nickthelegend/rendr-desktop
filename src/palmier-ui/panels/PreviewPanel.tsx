@@ -466,7 +466,13 @@ export function PreviewPanel({
 	} | null>(null);
 
 	const cursorSettings = state.cursor ?? DEFAULT_CURSOR;
-	const cursorHost = visible.find((clip) => clip.mediaType === "video");
+	// The pointer belongs to the screen recordings that captured it, not to
+	// camera footage sharing the project — same rule as the export.
+	const cursorHost = visible.find(
+		(clip) =>
+			clip.mediaType === "video" &&
+			state.assets.some((asset) => asset.id === clip.assetId && asset.hasCursorTelemetry),
+	);
 	const timing = state.zoomTiming ?? DEFAULT_ZOOM_TIMING;
 
 	// Everything the tick needs, refreshed each render so the loop itself never

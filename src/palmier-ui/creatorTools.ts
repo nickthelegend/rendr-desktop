@@ -49,6 +49,7 @@ import {
 	compactFaceTrack,
 	type FaceTrack,
 	type FootageAnalysis,
+	faceAt,
 	faceCoverage,
 	primaryFace,
 	typicalFace,
@@ -626,8 +627,9 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 			for (const clip of segments) {
 				const base = clip.punch?.base ?? boxOf(clip.transform);
 				const animated = clip.keyframes?.position?.length || clip.keyframes?.scale?.length;
-				// Motion someone else authored is theirs; a push of ours we can redo.
-				if (animated && !clip.punch) {
+				// Motion someone else authored is theirs; a push of ours, or the
+				// face-follow path Rendr's reframe made, we can redo.
+				if (animated && !clip.punch && !clip.faceFollow) {
 					skipped.push(clip.id);
 					continue;
 				}
@@ -635,6 +637,8 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 				if (clip.punch && restKeyframes) {
 					delete restKeyframes.position;
 					delete restKeyframes.scale;
+					// A followed clip gets its own path back, not a static frame.
+					if (clip.punch.basePosition) restKeyframes.position = clip.punch.basePosition;
 				}
 				const restored: Partial<ClipModel> = {
 					transform: { ...clip.transform, ...base },
@@ -663,6 +667,57 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 					canvasAspect,
 				);
 				const target = punchBox(base, focus, amount);
+				const followPath = clip.faceFollow
+					? (clip.punch?.basePosition ?? clip.keyframes?.position)
+					: undefined;
+				if (followPath?.length) {
+					// Push in at every point of the follow path, on the face as it is
+					// there — so the punch and the follow agree, and nothing pans off.
+					const sourceAt = (local: number) =>
+						(clip.trimStartFrame + local * clip.speed) / timeline.fps;
+					const position = followPath.map((key) => {
+						const box = {
+							width: base.width,
+							height: base.height,
+							centerX: key.values[0] + base.width / 2,
+							centerY: key.values[1] + base.height / 2,
+						};
+						const point = asset?.faceTrack
+							? faceAt(asset.faceTrack, sourceAt(key.frame), 1)
+							: null;
+						const pushed = punchBox(
+							box,
+							faceInFrame(
+								box,
+								point
+									? { x: point.cx, y: point.cy }
+									: (face ?? { x: 0.5, y: 0.38 }),
+								pictureAspect,
+								canvasAspect,
+							),
+							amount,
+						);
+						return {
+							...key,
+							values: [
+								pushed.centerX - pushed.width / 2,
+								pushed.centerY - pushed.height / 2,
+							],
+						};
+					});
+					plans.set(clip.id, {
+						...restored,
+						transform: {
+							...clip.transform,
+							...base,
+							width: base.width * amount,
+							height: base.height * amount,
+						},
+						keyframes: { ...(restored.keyframes ?? {}), position },
+						punch: { base, factor: amount, basePosition: followPath },
+					});
+					continue;
+				}
 				if (style === "push") {
 					const { scale, position } = pushKeyframes(
 						base,
