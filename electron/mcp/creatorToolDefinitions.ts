@@ -201,4 +201,54 @@ export const CREATOR_TOOLS: AgentTool[] = [
 			cutAggressiveness: { type: "string", enum: ["tight", "balanced", "loose"] },
 		}),
 	},
+	{
+		name: "create_thumbnail",
+		description:
+			"Makes a YouTube-style thumbnail from the footage: the speaker cut out (from the moment they're closest to camera, unless atSeconds is given) with a white sticker outline, on a bold backdrop, next to a huge stroked title with highlight words in an accent colour. Needs analyze_footage (runs it if missing). The PNG lands in the media library, optionally also at outputPath, and a preview comes back so you can judge it — make two or three variants and let the user pick. format 'youtube' is 1280×720; 'shorts' is a 1080×1920 cover with the title on top.",
+		inputSchema: object(
+			{
+				title: {
+					type: "string",
+					description: "3–5 punchy words. Uppercased automatically.",
+				},
+				highlight: {
+					type: "array",
+					items: { type: "string" },
+					description: "Words of the title to paint in the accent colour.",
+				},
+				assetId: {
+					type: "string",
+					description:
+						"Footage to take the speaker from. Default: the timeline's main footage.",
+				},
+				atSeconds: {
+					type: "number",
+					description: "Source time to take the speaker from. Default: largest face.",
+				},
+				background: {
+					description:
+						"A colour, or [from, to] for a diagonal gradient. Default deep green.",
+				},
+				accent: { type: "string", description: "Highlight colour. Default '#F5D90A'." },
+				textColor: { type: "string" },
+				side: {
+					type: "string",
+					enum: ["left", "right"],
+					description: "Where the speaker stands. Default right.",
+				},
+				outline: {
+					type: "number",
+					description: "Sticker outline width, px at 720p. 0 for none. Default 10.",
+				},
+				format: { type: "string", enum: ["youtube", "shorts"] },
+				name: { type: "string" },
+				outputPath: {
+					type: "string",
+					description: "Also write the PNG here (absolute path).",
+				},
+				waitSeconds: WAIT_SECONDS,
+			},
+			["title"],
+		),
+	},
 ];

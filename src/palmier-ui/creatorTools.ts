@@ -39,7 +39,20 @@ import type { TimelineModel } from "./reducers";
 import { findClip } from "./reducers";
 import { findRetakes } from "./retakes";
 import type { EditorApi } from "./state";
-import { compactFaceTrack, type FootageAnalysis, faceCoverage, typicalFace } from "./vision";
+import {
+	bestFaceMoment,
+	DEFAULT_THUMBNAIL,
+	renderThumbnail,
+	type ThumbnailSpec,
+} from "./thumbnail";
+import {
+	compactFaceTrack,
+	type FaceTrack,
+	type FootageAnalysis,
+	faceCoverage,
+	primaryFace,
+	typicalFace,
+} from "./vision";
 
 function ok(payload: unknown): ToolResult {
 	return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
@@ -67,7 +80,14 @@ interface AnalysisJob {
 }
 
 type AnalysisOutcome =
-	| { ok: true; matteAssetId: string; summary: Record<string, unknown> }
+	| {
+			ok: true;
+			matteAssetId: string;
+			summary: Record<string, unknown>;
+			/** What was attached, for a caller that needs it before state catches up. */
+			matte: AssetModel;
+			faceTrack?: FaceTrack;
+	  }
 	| { ok: false; reason: string };
 
 const jobs = new Map<string, AnalysisJob>();
@@ -142,6 +162,8 @@ async function runAnalysis(
 		ok: true,
 		matteAssetId: asset.matteAssetId ?? matte.id,
 		summary: summarize(asset, analysis),
+		matte,
+		faceTrack: analysis.faces ? compactFaceTrack(analysis.faces) : undefined,
 	};
 }
 
@@ -305,6 +327,21 @@ export function parseElements(input: unknown): { elements: GraphicElement[] } | 
 			return { error: `elements[${index}] needs data.` };
 	}
 	return { elements: input as GraphicElement[] };
+}
+
+/** A <video> seeked to a time, resolved once the frame is there. */
+function videoAt(url: string, seconds: number): Promise<HTMLVideoElement> {
+	return new Promise((resolve, reject) => {
+		const video = document.createElement("video");
+		video.muted = true;
+		video.preload = "auto";
+		video.onerror = () => reject(new Error("Couldn't decode the footage."));
+		video.onloadeddata = () => {
+			video.onseeked = () => resolve(video);
+			video.currentTime = Math.max(0, Math.min(seconds, (video.duration || seconds) - 0.05));
+		};
+		video.src = url;
+	});
 }
 
 export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> {
@@ -729,6 +766,154 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 				totalSeconds: Math.round(seconds * 10) / 10,
 				note: "Cut. Transcript indices have changed — re-read get_transcript before any further remove_words.",
 			});
+		},
+
+		async create_thumbnail(args: Record<string, unknown>): Promise<ToolResult> {
+			const title = asString(args.title)?.trim();
+			if (!title)
+				return fail(
+					"invalid_argument",
+					"A thumbnail needs a title — three or four punchy words work best.",
+				);
+			const assetId =
+				asString(args.assetId) ??
+				timeline.tracks[footageTrackIndex(timeline)]?.clips.find(
+					(clip) => clip.mediaType === "video",
+				)?.assetId;
+			const asset = state.assets.find((entry) => entry.id === assetId);
+			if (!asset || asset.type !== "video") {
+				return fail(
+					"not_found",
+					"No footage to take the speaker from. Pass assetId, or put the footage on the timeline.",
+				);
+			}
+			if (asset.offline || !asset.url)
+				return fail("offline", `'${asset.name}' needs relinking first.`);
+
+			let matteAsset = asset.matteAssetId
+				? state.assets.find((entry) => entry.id === asset.matteAssetId)
+				: undefined;
+			let faceTrack = asset.faceTrack;
+			if (!matteAsset?.url || matteAsset.offline || !faceTrack) {
+				const result = await ensureAnalysis(api, asset, { waitMs: waitMsFrom(args) });
+				if (result.status === "running") {
+					return ok({
+						status: "running",
+						progress: result.progress,
+						note: "Analysing the footage first. Call create_thumbnail again with the same arguments.",
+					});
+				}
+				if (!result.outcome.ok) return fail("analysis_failed", result.outcome.reason);
+				// The analysis landed in state after this snapshot, so use what it attached.
+				matteAsset = result.outcome.matte;
+				faceTrack = result.outcome.faceTrack;
+			}
+			if (!matteAsset?.url || !faceTrack) {
+				return fail(
+					"analysis_failed",
+					"The footage was analysed but has no matte or face track to use.",
+				);
+			}
+
+			const vertical = args.format === "shorts" || args.format === "vertical";
+			const at =
+				typeof args.atSeconds === "number"
+					? args.atSeconds
+					: (bestFaceMoment(faceTrack) ?? asset.durationSeconds / 2);
+			const nearest = faceTrack.samples.reduce((best, sample) =>
+				Math.abs(sample.t - at) < Math.abs(best.t - at) ? sample : best,
+			);
+			const face = primaryFace(nearest.faces);
+			if (!face) {
+				return fail(
+					"no_face",
+					`Nobody is in shot at ${at.toFixed(1)}s. Omit atSeconds to let Rendr pick the best moment.`,
+				);
+			}
+
+			const background = Array.isArray(args.background)
+				? (args.background.slice(0, 2).map(String) as [string, string])
+				: (asString(args.background) ?? DEFAULT_THUMBNAIL.background);
+			const spec: ThumbnailSpec = {
+				...DEFAULT_THUMBNAIL,
+				width: vertical ? 1080 : 1280,
+				height: vertical ? 1920 : 720,
+				title,
+				highlight: Array.isArray(args.highlight) ? args.highlight.map(String) : undefined,
+				background,
+				textColor: asString(args.textColor) ?? DEFAULT_THUMBNAIL.textColor,
+				accent: asString(args.accent) ?? DEFAULT_THUMBNAIL.accent,
+				side: args.side === "left" ? "left" : "right",
+				outline:
+					typeof args.outline === "number" ? args.outline : DEFAULT_THUMBNAIL.outline,
+			};
+
+			const [frame, matte] = await Promise.all([
+				videoAt(asset.url, at),
+				videoAt(matteAsset.url, at),
+			]);
+			const image = renderThumbnail(spec, {
+				frame,
+				matte,
+				frameWidth: frame.videoWidth,
+				frameHeight: frame.videoHeight,
+				face,
+			});
+			frame.removeAttribute("src");
+			matte.removeAttribute("src");
+
+			const blob = await new Promise<Blob | null>((resolve) =>
+				image.toBlob(resolve, "image/png"),
+			);
+			if (!blob) return fail("render_failed", "Couldn't encode the thumbnail.");
+			const name = asString(args.name) ?? `Thumbnail – ${title}`;
+			const file = new File([blob], `${name.replace(/[^\w. –-]/g, "")}.png`, {
+				type: "image/png",
+			});
+			const [added] = await api.importMedia([file]);
+
+			let savedTo: string | undefined;
+			const outputPath = asString(args.outputPath);
+			if (outputPath) {
+				const bridge = window.electronAPI;
+				const written = await bridge?.writeExportedVideoToPath?.(
+					await blob.arrayBuffer(),
+					outputPath,
+				);
+				if (!written?.success)
+					return fail(
+						"write_failed",
+						written?.message ?? `Couldn't write ${outputPath}.`,
+					);
+				savedTo = written.path;
+			}
+
+			// A small copy comes back so the agent can look at what it made.
+			const preview = document.createElement("canvas");
+			preview.width = vertical ? 360 : 640;
+			preview.height = vertical ? 640 : 360;
+			preview.getContext("2d")?.drawImage(image, 0, 0, preview.width, preview.height);
+			const data = preview.toDataURL("image/jpeg", 0.85).split(",")[1] ?? "";
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(
+							{
+								assetId: added?.id,
+								name: added?.name,
+								size: [spec.width, spec.height],
+								speakerFrom: Math.round(at * 100) / 100,
+								savedTo,
+								note: "In the media library. Tweak title / highlight / background / side and call again for variants.",
+							},
+							null,
+							2,
+						),
+					},
+					{ type: "image", data, mimeType: "image/jpeg" },
+				],
+			};
 		},
 
 		async remove_background(args: Record<string, unknown>): Promise<ToolResult> {
