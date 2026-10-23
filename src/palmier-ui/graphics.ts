@@ -468,14 +468,37 @@ export function layoutAround(
 		const y = Math.min(0.9, Math.max(0.1, 0.5 + Math.sin(angle) * 0.36));
 		if (!blocked(x, y)) candidates.push([x, y]);
 	}
-	const pool = candidates.length >= count ? candidates : layoutGrid(count);
-	if (pool === candidates) {
-		return Array.from(
-			{ length: count },
-			(_, index) => pool[Math.floor(((index + 0.5) / count) * pool.length)],
-		);
+	if (candidates.length < count) return layoutGrid(count);
+	return spreadOut(candidates, count);
+}
+
+/**
+ * Picks `count` of the candidates as far from each other as possible (in
+ * on-screen distance, so a 16:9 frame's width counts for more), then returns
+ * them in the candidates' own order — clockwise — so the map still reads round.
+ */
+function spreadOut(candidates: Array<[number, number]>, count: number): Array<[number, number]> {
+	const aspect = 16 / 9;
+	const distance = (a: [number, number], b: [number, number]) =>
+		Math.hypot((a[0] - b[0]) * aspect, a[1] - b[1]);
+	const chosen = [0];
+	while (chosen.length < count) {
+		let best = -1;
+		let bestDistance = -1;
+		for (let index = 0; index < candidates.length; index++) {
+			if (chosen.includes(index)) continue;
+			const nearest = Math.min(
+				...chosen.map((pick) => distance(candidates[index], candidates[pick])),
+			);
+			if (nearest > bestDistance) {
+				bestDistance = nearest;
+				best = index;
+			}
+		}
+		if (best < 0) break;
+		chosen.push(best);
 	}
-	return pool;
+	return chosen.sort((a, b) => a - b).map((index) => candidates[index]);
 }
 
 function layoutGrid(count: number): Array<[number, number]> {
