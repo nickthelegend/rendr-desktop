@@ -23,7 +23,20 @@ function settingsFile(): string {
 }
 
 function keyFile(): string {
-	return path.join(app.getPath("userData"), "agent-key.bin");
+	return path.join(app.getPath("userData"), "agent-keys.json");
+}
+
+/**
+ * Which provider a key belongs to: the origin of its base URL. A key is only
+ * ever read back for the origin it was saved under, so switching from OpenAI to
+ * a typed-in custom endpoint can't send the OpenAI key to it.
+ */
+export function keyOrigin(baseUrl: string): string | null {
+	try {
+		return new URL(baseUrl.trim()).origin;
+	} catch {
+		return null;
+	}
 }
 
 let cached: AgentSettings | null = null;
@@ -68,11 +81,23 @@ export function saveSettings(patch: Partial<AgentSettings>): AgentSettings {
 	return next;
 }
 
-export function readApiKey(): string | null {
+function readKeys(): Record<string, string> {
 	try {
-		if (!existsSync(keyFile())) return null;
-		const bytes = readFileSync(keyFile());
-		if (bytes.length === 0) return null;
+		if (!existsSync(keyFile())) return {};
+		const parsed = JSON.parse(readFileSync(keyFile(), "utf8")) as unknown;
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+	} catch {
+		return {};
+	}
+}
+
+/** The key saved for this base URL's origin, or null. */
+export function readApiKey(baseUrl: string): string | null {
+	const origin = keyOrigin(baseUrl);
+	const stored = origin ? readKeys()[origin] : undefined;
+	if (!stored) return null;
+	try {
+		const bytes = Buffer.from(stored, "base64");
 		return safeStorage.isEncryptionAvailable()
 			? safeStorage.decryptString(bytes)
 			: bytes.toString("utf8");
@@ -81,19 +106,24 @@ export function readApiKey(): string | null {
 	}
 }
 
-/** Stores the key, or clears it when given an empty string. */
-export function writeApiKey(key: string): void {
+/** Stores the key for this base URL's origin, or clears it when given an empty string. */
+export function writeApiKey(key: string, baseUrl: string): void {
+	const origin = keyOrigin(baseUrl);
+	if (!origin) throw new Error("Set the provider's base URL before its API key.");
+	const keys = readKeys();
 	const trimmed = key.trim();
-	if (!trimmed) {
-		writeFileSync(keyFile(), Buffer.alloc(0), { mode: 0o600 });
-		return;
+	if (trimmed) {
+		const bytes = safeStorage.isEncryptionAvailable()
+			? safeStorage.encryptString(trimmed)
+			: Buffer.from(trimmed, "utf8");
+		keys[origin] = bytes.toString("base64");
+	} else {
+		delete keys[origin];
 	}
-	const bytes = safeStorage.isEncryptionAvailable()
-		? safeStorage.encryptString(trimmed)
-		: Buffer.from(trimmed, "utf8");
-	writeFileSync(keyFile(), bytes, { mode: 0o600 });
+	writeFileSync(keyFile(), JSON.stringify(keys, null, 2), { mode: 0o600 });
 }
 
 export function publicSettings(): PublicAgentSettings {
-	return { ...loadSettings(), apiKeySet: readApiKey() !== null };
+	const settings = loadSettings();
+	return { ...settings, apiKeySet: readApiKey(settings.api.baseUrl) !== null };
 }

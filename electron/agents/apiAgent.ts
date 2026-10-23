@@ -336,6 +336,17 @@ async function runAnthropic(
 	context.emit({ kind: "error", message: `Stopped after ${MAX_STEPS} tool steps.` });
 }
 
+/** https anywhere, or plain http only to this machine (Ollama, LM Studio). */
+export function sendsKeySafely(baseUrl: string): boolean {
+	try {
+		const url = new URL(baseUrl);
+		if (url.protocol === "https:") return true;
+		return ["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname);
+	} catch {
+		return false;
+	}
+}
+
 export const apiProvider: AgentProvider = {
 	id: "api",
 
@@ -364,6 +375,16 @@ export const apiProvider: AgentProvider = {
 			emit({
 				kind: "error",
 				message: `Add your ${preset.label} API key in the agent settings.`,
+			});
+			emit({ kind: "done", sessionId: null });
+			return;
+		}
+		// A key never travels in the clear to anything but this machine.
+		if (context.apiKey && !sendsKeySafely(context.settings.api.baseUrl)) {
+			emit({
+				kind: "error",
+				message:
+					"That base URL is plain http to another machine, so Rendr won't send your API key to it. Use https.",
 			});
 			emit({ kind: "done", sessionId: null });
 			return;

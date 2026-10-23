@@ -85,7 +85,7 @@ function context(emit: (event: AgentEvent) => void, settings: AgentSettings): Ru
 		stdioBridge: nodeCommand(bridgeScriptPath()),
 		workDir: workDir(),
 		dispatch: dispatchTool,
-		apiKey: readApiKey(),
+		apiKey: readApiKey(settings.api.baseUrl),
 		// The API loop has no MCP handshake to deliver the manual, so it gets it whole.
 		instructions: settings.provider === "api" ? FULL_INSTRUCTIONS : AGENT_PREAMBLE,
 	};
@@ -124,7 +124,7 @@ export function registerAgentChat(getWindow: () => BrowserWindow | null): void {
 	});
 
 	ipcMain.handle(AGENT_CHAT_CHANNELS.setKey, (_event, key: string) => {
-		writeApiKey(typeof key === "string" ? key : "");
+		writeApiKey(typeof key === "string" ? key : "", loadSettings().api.baseUrl);
 		return publicSettings();
 	});
 
