@@ -82,7 +82,9 @@ export function MiniMarkdown({ text }: { text: string }) {
 				return (
 					<List key={key} className="pmr-md__list">
 						{block.items.map((item, itemIndex) => (
-							<li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>
+							<li key={`${key}-${itemIndex}`}>
+								{renderInline(item, `${key}-${itemIndex}`)}
+							</li>
 						))}
 					</List>
 				);

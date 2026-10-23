@@ -142,7 +142,9 @@ describe("relinking", () => {
 			faceTrack: { width: 1, height: 1, duration: 1, interval: 1, samples: [] },
 		});
 		const offline = [offlineAsset(toManifest(saved))];
-		const { relinked } = relinkAssets(offline, [asset({ id: "fresh", url: "blob:new", width: 3840 })]);
+		const { relinked } = relinkAssets(offline, [
+			asset({ id: "fresh", url: "blob:new", width: 3840 }),
+		]);
 		expect(relinked[0]).toMatchObject({
 			id: "a1",
 			url: "blob:new",
