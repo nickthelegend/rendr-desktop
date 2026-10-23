@@ -10,6 +10,7 @@ import type http from "node:http";
 
 import { FULL_INSTRUCTIONS } from "./agentInstructions";
 import type { ToolCallResult, ToolDispatcher } from "./httpServer";
+import { getPrompt, listPrompts } from "./recipes";
 import { type AgentTool, MCP_TOOLS, TOOLS_BY_NAME } from "./toolDefinitions";
 
 export type ToolFormat = "mcp" | "openai" | "openai-responses" | "anthropic" | "gemini";
@@ -236,6 +237,12 @@ export function llmsText(baseUrl: string): string {
 - Tool schemas: GET ${baseUrl}/v1/tools?format=openai|anthropic|gemini|mcp
 - OpenAPI: ${baseUrl}/openapi.json (3 operations) or ${baseUrl}/openapi.full.json (one per tool)
 
+## Recipes
+Proven plans for common creator edits (also MCP prompts / slash commands). GET ${baseUrl}/v1/recipes/<name>?media=…
+${listPrompts()
+	.map((recipe) => `- ${recipe.name}: ${recipe.description}`)
+	.join("\n")}
+
 ## Tools (${MCP_TOOLS.length})
 ${MCP_TOOLS.map((tool) => `- ${tool.name}: ${tool.description.split(/(?<=\.)\s/)[0]}`).join("\n")}
 
@@ -295,6 +302,18 @@ export async function handleRest(
 		(pathname === "/openapi.json" || pathname === "/openapi.full.json")
 	) {
 		send(res, 200, openApiDocument(context.baseUrl, pathname === "/openapi.full.json"));
+		return true;
+	}
+	if (req.method === "GET" && pathname === "/v1/recipes") {
+		send(res, 200, { recipes: listPrompts() });
+		return true;
+	}
+	const recipe = pathname.match(/^\/v1\/recipes\/([A-Za-z0-9_-]+)$/);
+	if (req.method === "GET" && recipe) {
+		const prompt = getPrompt(recipe[1], Object.fromEntries(query.entries()));
+		if (!prompt)
+			send(res, 404, { error: `Unknown recipe: ${recipe[1]}. GET /v1/recipes lists them.` });
+		else send(res, 200, { name: recipe[1], plan: prompt.messages[0].content.text });
 		return true;
 	}
 	if (req.method === "GET" && pathname === "/llms.txt") {

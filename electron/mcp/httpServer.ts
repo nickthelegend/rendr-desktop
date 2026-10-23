@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 
 import { FULL_INSTRUCTIONS } from "./agentInstructions";
+import { getPrompt, listPrompts } from "./recipes";
 import { handleRest } from "./rest";
 import { MCP_TOOLS } from "./toolDefinitions";
 
@@ -250,7 +251,8 @@ export class McpHttpServer {
 			id: message.id ?? 0,
 			result: {
 				protocolVersion: PROTOCOL_VERSION,
-				capabilities: { tools: { listChanged: true } },
+				// Prompts are Rendr's creator recipes: clients show them as slash commands.
+				capabilities: { tools: { listChanged: true }, prompts: { listChanged: false } },
 				serverInfo: { name: SERVER_NAME, version: "0.1.0" },
 				instructions: FULL_INSTRUCTIONS,
 			},
@@ -275,6 +277,26 @@ export class McpHttpServer {
 						})),
 					},
 				};
+			case "prompts/list":
+				return { jsonrpc: "2.0", id: message.id, result: { prompts: listPrompts() } };
+			case "prompts/get": {
+				const params = (message.params ?? {}) as { name?: unknown; arguments?: unknown };
+				const prompt =
+					typeof params.name === "string"
+						? getPrompt(
+								params.name,
+								(params.arguments ?? {}) as Record<string, unknown>,
+							)
+						: null;
+				if (!prompt) {
+					return {
+						jsonrpc: "2.0",
+						id: message.id,
+						error: { code: -32602, message: `Unknown prompt: ${String(params.name)}` },
+					};
+				}
+				return { jsonrpc: "2.0", id: message.id, result: prompt };
+			}
 			case "tools/call": {
 				const params = (message.params ?? {}) as { name?: unknown; arguments?: unknown };
 				if (typeof params.name !== "string") {

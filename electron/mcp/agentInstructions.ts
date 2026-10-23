@@ -55,4 +55,17 @@ export const PROJECT_NAVIGATION = `
 manage_project chooses which project this MCP session edits, and you may start with none open. Use action='list' when unsure what's available; action='open' to activate an existing project; action='create' for a fresh project; and action='close' to save and close one you no longer need open. It never deletes projects.
 The session stays on its project if the user activates another project window. Reads still inspect the session project, but changes pause until that project is visible again or action='open' selects the visible project.`;
 
-export const FULL_INSTRUCTIONS = SERVER_INSTRUCTIONS + "\n" + PROJECT_NAVIGATION;
+// Rendr's own: camera footage, for creators. Appended rather than woven into the
+// ported text above so that stays a faithful transcription.
+export const CREATOR_INSTRUCTIONS = `
+# Camera footage (creators)
+Rendr edits talking-head footage as well as screen recordings.
+- analyze_footage first on camera footage: it makes a person matte and a face track (on-device), and tells you whether this is a talking head (talkingHead, personCoverage, faceCoverage, typicalFace). Long takes may answer status 'running' — call again; the job continues.
+- Order matters for a talking-head edit: cut (remove_silence, remove_words) → add_punch_ins (needs the cuts to exist) → captions → normalize_audio (-14 LUFS for YouTube/Shorts). Reframe to 9:16 with reframe_timeline AFTER analysis so the crop follows the face.
+- remove_background: 'color' for a flat backdrop, 'blur' for portrait mode, 'remove' to let lower tracks show through. Graphics placed 'behind' (add_graphic layer 'behind', default for mind_map) sit between backdrop and speaker; the backdrop colour moves onto the graphic automatically.
+- add_graphic coordinates are frame-normalized (0–1); cards avoid the speaker's face when there is a face track, and avoid other graphics on screen — add a QR code before a mind map so the map lays out around it.
+- Prompts (slash commands) named edit_talking_head, make_short, explainer_look, clean_audio and add_key_points carry complete plans; follow them when the user asks for one of those outcomes.
+- Always view_frame the result at a few moments before calling an edit done — check faces aren't covered or cropped and captions are inside the frame.`;
+
+export const FULL_INSTRUCTIONS =
+	SERVER_INSTRUCTIONS + "\n" + PROJECT_NAVIGATION + "\n" + CREATOR_INSTRUCTIONS;

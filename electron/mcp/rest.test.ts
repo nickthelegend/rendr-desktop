@@ -186,3 +186,100 @@ describe("token gate (remote access)", () => {
 		expect(splitPathToken("/mcp")).toEqual({ pathname: "/mcp", pathToken: null });
 	});
 });
+
+describe("recipes", () => {
+	async function initialize(): Promise<string> {
+		const response = await post("/mcp", {
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: {},
+		});
+		const body = await response.json();
+		expect(body.result.capabilities.prompts).toBeDefined();
+		return response.headers.get("mcp-session-id") ?? "";
+	}
+
+	it("serves the creator recipes as MCP prompts", async () => {
+		await start();
+		const session = await initialize();
+		const list = await (
+			await post(
+				"/mcp",
+				{ jsonrpc: "2.0", id: 2, method: "prompts/list" },
+				{ "Mcp-Session-Id": session },
+			)
+		).json();
+		const names = list.result.prompts.map((prompt: { name: string }) => prompt.name);
+		expect(names).toEqual(
+			expect.arrayContaining(["edit_talking_head", "make_short", "explainer_look"]),
+		);
+
+		const got = await (
+			await post(
+				"/mcp",
+				{
+					jsonrpc: "2.0",
+					id: 3,
+					method: "prompts/get",
+					params: {
+						name: "make_short",
+						arguments: { media: "IMG_0042.MOV", length: "30" },
+					},
+				},
+				{ "Mcp-Session-Id": session },
+			)
+		).json();
+		const text = got.result.messages[0].content.text as string;
+		expect(text).toContain("IMG_0042.MOV");
+		expect(text).toContain("30-second");
+		// The plan is written in Rendr's real tool names.
+		for (const tool of [
+			"analyze_footage",
+			"reframe_timeline",
+			"add_captions",
+			"export_project",
+		]) {
+			expect(text).toContain(tool);
+			expect(MCP_TOOLS.some((entry) => entry.name === tool)).toBe(true);
+		}
+	});
+
+	it("refuses an unknown prompt as a protocol error", async () => {
+		await start();
+		const session = await initialize();
+		const body = await (
+			await post(
+				"/mcp",
+				{ jsonrpc: "2.0", id: 4, method: "prompts/get", params: { name: "nope" } },
+				{ "Mcp-Session-Id": session },
+			)
+		).json();
+		expect(body.error.code).toBe(-32602);
+	});
+
+	it("serves recipes over REST for agents without MCP", async () => {
+		await start();
+		const list = await (await fetch(`${ORIGIN}/v1/recipes`)).json();
+		expect(list.recipes.length).toBeGreaterThanOrEqual(5);
+		const plan = await (
+			await fetch(`${ORIGIN}/v1/recipes/explainer_look?link=https://x.y`)
+		).json();
+		expect(plan.plan).toContain("https://x.y");
+		expect((await fetch(`${ORIGIN}/v1/recipes/nope`)).status).toBe(404);
+	});
+
+	it("only names tools that exist, in every recipe", async () => {
+		const { RECIPES } = await import("./recipes");
+		const known = new Set(MCP_TOOLS.map((tool) => tool.name));
+		for (const recipe of RECIPES) {
+			const text = recipe.build({ media: "x", link: "https://x", topics: "a, b" });
+			const mentioned = text.match(/\b[a-z]+(?:_[a-z]+)+\b/g) ?? [];
+			for (const name of mentioned) {
+				// Snake-case words in a plan are tool names, except a few argument values.
+				if (["talking_head", "mind_map", "key_points"].includes(name)) continue;
+				expect(known.has(name), `${recipe.name} mentions ${name}`).toBe(true);
+			}
+		}
+	});
+});

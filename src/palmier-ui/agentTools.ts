@@ -802,9 +802,11 @@ export function createAgentTools(api: EditorApi) {
 			);
 			// `folder` includes subfolders, as the contract says.
 			const folder = asString(args.folder);
+			// Person mattes are the compositor's, not media to place; asking for
+			// one by id still finds it.
 			let assets = ids.length
 				? state.assets.filter((asset) => ids.includes(asset.id))
-				: state.assets;
+				: state.assets.filter((asset) => !asset.isMatte);
 			if (folder) {
 				assets = assets.filter(
 					(asset) => asset.folder === folder || asset.folder?.startsWith(`${folder}/`),
@@ -821,6 +823,12 @@ export function createAgentTools(api: EditorApi) {
 					hasAudio: asset.hasAudio,
 					...(asset.folder ? { folder: asset.folder } : {}),
 					...(asset.hasCursorTelemetry ? { hasCursorTelemetry: true } : {}),
+					// What footage analysis knows, so an agent can skip re-running it.
+					...(asset.matteAssetId ? { hasMatte: true } : {}),
+					...(asset.faceTrack ? { hasFaceTrack: true } : {}),
+					...(asset.personCoverage !== undefined
+						? { personCoverage: Math.round(asset.personCoverage * 100) / 100 }
+						: {}),
 					// Which takes have a camera to composite, and which assets
 					// are that camera rather than something to edit.
 					...(asset.webcamAssetId ? { webcamAssetId: asset.webcamAssetId } : {}),

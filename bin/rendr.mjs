@@ -4,6 +4,8 @@
 //   rendr status                     Is Rendr running, and how many tools does it have?
 //   rendr tools [--format F]         List tools (names), or full schemas as mcp|openai|anthropic|gemini
 //   rendr call <tool> [json|-]       Call a tool; arguments as JSON, or "-" to read them from stdin
+//   rendr recipes                    Proven edit plans (edit_talking_head, make_short, …)
+//   rendr recipe <name> [k=v …]      One recipe's plan, e.g. rendr recipe make_short media=IMG_0042.MOV
 //   rendr instructions               The manual Rendr gives every agent (llms.txt)
 //   rendr openapi [--full]           The OpenAPI document
 //   rendr mcp                        Speak MCP over stdio (for clients that launch servers as commands)
@@ -28,6 +30,8 @@ function usage(code = 2) {
   rendr status
   rendr tools [--format mcp|openai|openai-responses|anthropic|gemini]
   rendr call <tool> ['{"json":"args"}' | -] [--json]
+  rendr recipes
+  rendr recipe <name> [key=value …]
   rendr instructions
   rendr openapi [--full]
   rendr mcp
@@ -166,6 +170,31 @@ async function main() {
 			}
 		}
 		process.exit(result.isError ? 1 : 0);
+	}
+
+	if (command === "recipes") {
+		const body = await json(await request("/v1/recipes"));
+		for (const recipe of body.recipes)
+			console.log(`${recipe.name.padEnd(20)} ${recipe.description}`);
+		return;
+	}
+
+	if (command === "recipe") {
+		const name = args.shift();
+		if (!name) usage();
+		const query = new URLSearchParams(
+			args
+				.filter((arg) => arg.includes("="))
+				.map((arg) => [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)]),
+		);
+		const response = await request(`/v1/recipes/${encodeURIComponent(name)}?${query}`);
+		const body = await json(response);
+		if (!response.ok) {
+			console.error(`rendr: ${body.error}`);
+			process.exit(2);
+		}
+		console.log(body.plan);
+		return;
 	}
 
 	if (command === "instructions") {
