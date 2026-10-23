@@ -5,7 +5,7 @@
 **Record and edit in one app — driven by humans and agents alike.**
 
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-2563eb?style=for-the-badge)](LICENSE.md)
-[![MCP](https://img.shields.io/badge/MCP-50%20tools-7c3aed?style=for-the-badge)](#the-mcp-server)
+[![MCP](https://img.shields.io/badge/MCP-102%20tools-7c3aed?style=for-the-badge)](#rendr-connect--any-agent-any-model)
 
 </div>
 
@@ -160,21 +160,70 @@ clock, so the encoder lines them up without drift correction.
 
 ---
 
-## The MCP server
+## Rendr Connect — any agent, any model
 
-Rendr runs an MCP server on `127.0.0.1:19790` so **Claude Code, or any agent-driven
-IDE**, can drive the editor. It speaks streamable HTTP JSON-RPC.
+Rendr has no model of its own and no lock-in. It works in both directions.
 
-### Connecting from Claude Code
+### Bring your own agent to the panel
+
+The agent panel answers with whatever you already pay for. Pick it in **Agent → settings**:
+
+| Agent | What it uses |
+|---|---|
+| **Claude Code** | your Claude Pro / Max / Team plan, through the `claude` CLI |
+| **Codex** | your ChatGPT plan, through the `codex` CLI |
+| **Any ACP agent** | Gemini CLI, OpenCode, Goose, Qwen Code, the Claude Code / Codex ACP adapters, or any command that speaks the [Agent Client Protocol](https://agentclientprotocol.com) |
+| **API key / local model** | OpenAI, Anthropic, OpenRouter, Google Gemini, Groq, DeepSeek, Mistral, xAI, Together, any OpenAI-compatible endpoint, or a local Ollama / LM Studio model |
+
+CLIs and ACP agents get Rendr's MCP server handed to them. The API path runs Rendr's
+own tool loop in-process. Every call lands in the panel as a receipt either way. API keys
+are encrypted with the OS keychain and never reach the renderer. ACP agents are allowed
+to run Rendr's tools and nothing else: a request to run a shell command or edit a file is
+refused.
+
+### Plug Rendr into any agent
+
+The **plug** button in the agent panel opens Rendr Connect:
+
+- **Apps**: one-click setup for Claude Code, Codex, Gemini CLI, OpenCode, Cursor, VS Code
+  (Copilot), Windsurf, Claude Desktop and LM Studio, plus copy-paste snippets for Zed and
+  any stdio client. Rendr merges one key into each app's config, keeps a backup, and never
+  rewrites a file it can't fully parse.
+- **Cloud**: remote access for agents that can't reach your machine, such as claude.ai,
+  ChatGPT (developer mode), custom GPTs, Le Chat and hosted agent platforms. It opens a
+  second, token-protected listener behind a Cloudflare quick tunnel (or your own ngrok /
+  Tailscale URL) and gives you one connector URL. It's off by default, off again on every
+  launch, and the token can be rotated instantly.
+- **Developers**: every tool as plain HTTP.
+
+| Surface | Where |
+|---|---|
+| MCP (streamable HTTP) | `http://127.0.0.1:19790/mcp` |
+| MCP (stdio) | `npm run mcp:bridge`, or `rendr mcp` |
+| Call a tool | `POST /v1/call` with `{"name": "...", "arguments": {...}}` |
+| Tool schemas | `GET /v1/tools?format=openai\|openai-responses\|anthropic\|gemini\|mcp` |
+| OpenAPI 3.1 | `/openapi.json` (3 operations, fits a custom GPT) · `/openapi.full.json` (one per tool) |
+| Agent manual | `/llms.txt` |
 
 ```bash
 claude mcp add --transport http rendr http://127.0.0.1:19790/mcp
+codex mcp add rendr --url http://127.0.0.1:19790/mcp
+gemini mcp add --scope user --transport http rendr http://127.0.0.1:19790/mcp
 ```
 
-Any other MCP-capable client works the same way — point it at that URL while Rendr
-is running.
+### The `rendr` command
 
-### What the agent can do — 101 tools
+For agents that only have a shell. Install it from **Connect → Apps**. It runs on
+Rendr's own runtime, so Node isn't required.
+
+```bash
+rendr status
+rendr tools --format openai          # schemas for any function-calling model
+rendr call add_title '{"text":"Hello"}'
+RENDR_URL=https://<tunnel>/t/<token> rendr call get_timeline   # a remote Rendr
+```
+
+### What the agent can do — 102 tools
 
 Every one has a handler, is advertised over MCP, and has been run against the
 running app. None is a stub.

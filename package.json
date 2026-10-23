@@ -42,7 +42,7 @@
     "release:create": "node scripts/create-release.mjs",
     "test": "vitest --run",
     "test:watch": "vitest",
-    "mcp:bridge": "node mcpb/server/index.js",
+    "mcp:bridge": "node mcpb/server/index.cjs",
     "demo:record": "node scripts/record-demo.mjs",
     "demo:build": "node scripts/build-demo.mjs"
   },
@@ -134,5 +134,8 @@
     "linux": {
       "icon": "build/icon.png"
     }
+  },
+  "bin": {
+    "rendr": "bin/rendr.mjs"
   }
 }

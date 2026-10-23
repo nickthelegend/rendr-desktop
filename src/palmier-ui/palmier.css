@@ -3345,3 +3345,219 @@
 .pmr-snapline {
 	margin-left: var(--pmr-track-header);
 }
+
+/* ── Rendr Connect ────────────────────────────────────────────────────
+   The agent behind the panel, and every way other agents reach Rendr. */
+.pmr-agent__who {
+	padding: 0 4px;
+	border: none;
+	background: transparent;
+	font: inherit;
+	cursor: default;
+}
+
+.pmr-agent__who:hover {
+	color: var(--pmr-text-2) !important;
+}
+
+.pmr-connect {
+	max-width: 680px;
+	height: min(640px, 100%);
+}
+
+.pmr-connect__tabs {
+	padding: 10px 14px 0;
+}
+
+.pmr-connect code,
+.pmr-connect__code,
+.pmr-connect__snippet,
+.pmr-connect__path {
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 10.5px;
+}
+
+.pmr-connect__choices {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 6px;
+}
+
+.pmr-connect__choice {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 3px;
+	padding: 9px 10px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(255, 255, 255, 0.02);
+	color: var(--pmr-text-2);
+	font: inherit;
+	text-align: left;
+	cursor: default;
+	transition:
+		border-color 0.15s ease-out,
+		background 0.15s ease-out;
+}
+
+.pmr-connect__choice:hover {
+	border-color: var(--pmr-border);
+	background: rgba(255, 255, 255, 0.04);
+}
+
+.pmr-connect__choice[data-active="true"] {
+	border-color: var(--pmr-accent);
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.pmr-connect__choice-title {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--pmr-text);
+}
+
+.pmr-connect__choice-detail {
+	font-size: 10.5px;
+	line-height: 1.45;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-connect__status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 28px;
+	font-size: 11px;
+	color: var(--pmr-text-2);
+}
+
+.pmr-connect__dot {
+	flex: 0 0 6px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+}
+
+.pmr-connect__clients {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	overflow: hidden;
+}
+
+.pmr-connect__client + .pmr-connect__client {
+	border-top: 1px solid var(--pmr-border-subtle);
+}
+
+.pmr-connect__client[data-detected="false"] .pmr-connect__client-name {
+	color: var(--pmr-text-3);
+}
+
+.pmr-connect__client-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px 6px 10px;
+}
+
+.pmr-connect__client-name {
+	font-size: 12px;
+	color: var(--pmr-text);
+}
+
+.pmr-connect__client-meta {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 10.5px;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-connect__client-detail {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 0 10px 10px 24px;
+}
+
+.pmr-connect__client-note {
+	padding: 0 10px 8px 24px;
+}
+
+.pmr-connect__path {
+	color: var(--pmr-text-muted);
+	word-break: break-all;
+}
+
+.pmr-connect__snippet {
+	margin: 0;
+	padding: 8px 10px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(0, 0, 0, 0.35);
+	color: var(--pmr-text-2);
+	white-space: pre-wrap;
+	word-break: break-all;
+	user-select: text;
+	max-height: 220px;
+	overflow: auto;
+}
+
+.pmr-connect__field {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.pmr-connect__field-label {
+	flex: 0 0 96px;
+	font-size: 11px;
+	color: var(--pmr-text-3);
+}
+
+.pmr-connect__code {
+	flex: 1;
+	min-width: 0;
+	height: 24px;
+	padding: 0 8px;
+	line-height: 24px;
+	border: 1px solid var(--pmr-border-subtle);
+	border-radius: var(--pmr-radius-xs);
+	background: rgba(0, 0, 0, 0.35);
+	color: var(--pmr-text-2);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	user-select: text;
+}
+
+.pmr-connect__group {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding-top: 6px;
+}
+
+.pmr-connect__group-title {
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.5px;
+	text-transform: uppercase;
+	color: var(--pmr-text-muted);
+}
+
+.pmr-connect__step {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.pmr-connect__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}

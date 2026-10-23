@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 
 import { FULL_INSTRUCTIONS } from "./agentInstructions";
+import { handleRest } from "./rest";
 import { MCP_TOOLS } from "./toolDefinitions";
 
 export const MCP_PORT = 19790;
@@ -44,6 +45,18 @@ export type ToolDispatcher = (
 	args: Record<string, unknown>,
 ) => Promise<ToolCallResult>;
 
+export interface McpServerOptions {
+	/**
+	 * When this returns a token, every request must present it — as a bearer
+	 * token, an `x-rendr-token` header, or a `/t/<token>/` path prefix for
+	 * clients that can only be given a URL. Remote access runs this way; the
+	 * loopback server Rendr starts for local agents does not.
+	 */
+	token?: () => string | null;
+	/** The base URL clients reach this server at, for documents that name it. */
+	publicUrl?: () => string | null;
+}
+
 interface Session {
 	id: string;
 	lastUsed: number;
@@ -62,9 +75,12 @@ export class McpHttpServer {
 	/** The port actually bound. Differs from the request when 0 is passed. */
 	private boundPort = 0;
 
-	constructor(dispatch: ToolDispatcher, port: number = MCP_PORT) {
+	private readonly options: McpServerOptions;
+
+	constructor(dispatch: ToolDispatcher, port: number = MCP_PORT, options: McpServerOptions = {}) {
 		this.dispatch = dispatch;
 		this.requestedPort = port;
+		this.options = options;
 	}
 
 	get port(): number {
@@ -126,19 +142,44 @@ export class McpHttpServer {
 
 	private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
 		const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.boundPort}`);
+		const { pathname, pathToken } = splitPathToken(url.pathname);
+		const token = this.options.token?.() ?? null;
 
-		if (url.pathname === "/.well-known/oauth-protected-resource") {
-			writeJson(res, 200, { resource: `http://127.0.0.1:${this.boundPort}` });
-			return;
+		if (token) {
+			// No OAuth here: advertising protected-resource metadata would send
+			// clients off to an authorization server that doesn't exist.
+			if (pathname.startsWith("/.well-known/")) {
+				res.writeHead(404).end();
+				return;
+			}
+			const presented = pathToken ?? bearerToken(req) ?? headerValue(req, "x-rendr-token");
+			if (!presented || !tokensMatch(presented, token)) {
+				res.writeHead(401, { "WWW-Authenticate": 'Bearer realm="rendr"' }).end();
+				return;
+			}
+		} else {
+			if (pathname === "/.well-known/oauth-protected-resource") {
+				writeJson(res, 200, { resource: `http://127.0.0.1:${this.boundPort}` });
+				return;
+			}
+			// Reject cross-origin browser callers; a local MCP server is not a web API.
+			const origin = req.headers.origin;
+			if (typeof origin === "string" && !isLoopbackOrigin(origin)) {
+				res.writeHead(403).end();
+				return;
+			}
 		}
-		if (url.pathname !== MCP_PATH && url.pathname !== "/") {
+
+		const baseUrl = this.options.publicUrl?.() ?? `http://127.0.0.1:${this.boundPort}`;
+		const handled = await handleRest(req, res, pathname, url.searchParams, {
+			dispatch: this.dispatch,
+			readBody: () => readBody(req),
+			baseUrl,
+		});
+		if (handled) return;
+
+		if (pathname !== MCP_PATH && pathname !== "/") {
 			res.writeHead(404).end();
-			return;
-		}
-		// Reject cross-origin browser callers; a local MCP server is not a web API.
-		const origin = req.headers.origin;
-		if (typeof origin === "string" && !isLoopbackOrigin(origin)) {
-			res.writeHead(403).end();
 			return;
 		}
 
@@ -337,6 +378,26 @@ function headerValue(req: http.IncomingMessage, name: string): string | null {
 	if (typeof raw === "string") return raw;
 	if (Array.isArray(raw)) return raw[0] ?? null;
 	return null;
+}
+
+/** Peels a `/t/<token>` prefix off a path, for clients that can only be handed a URL. */
+export function splitPathToken(pathname: string): { pathname: string; pathToken: string | null } {
+	const match = pathname.match(/^\/t\/([^/]+)(\/.*)?$/);
+	if (!match) return { pathname, pathToken: null };
+	return { pathname: match[2] ?? "/", pathToken: decodeURIComponent(match[1]) };
+}
+
+function bearerToken(req: http.IncomingMessage): string | null {
+	const header = headerValue(req, "authorization");
+	const match = header?.match(/^Bearer\s+(.+)$/i);
+	return match ? match[1].trim() : null;
+}
+
+/** Constant-time, so a token can't be guessed a byte at a time from response timing. */
+export function tokensMatch(presented: string, expected: string): boolean {
+	const a = crypto.createHash("sha256").update(presented).digest();
+	const b = crypto.createHash("sha256").update(expected).digest();
+	return crypto.timingSafeEqual(a, b);
 }
 
 function isLoopbackOrigin(origin: string): boolean {

@@ -193,6 +193,29 @@ export const SparkleIcon = ({ size = 14 }: IconProps) =>
 export const SendIcon = ({ size = 13 }: IconProps) =>
 	svg(<path d="M2.5 8 13.5 3 9.5 13 8 9.2z" />, size);
 
+/** powerplug — Rendr Connect */
+export const PlugIcon = ({ size = 13 }: IconProps) =>
+	svg(
+		<>
+			<path d="M6 2v3M10 2v3" />
+			<path d="M4.5 5h7v2.5a3.5 3.5 0 0 1-7 0z" />
+			<path d="M8 11v3" />
+		</>,
+		size,
+	);
+
+/** slider.horizontal.3 — agent settings */
+export const SlidersIcon = ({ size = 13 }: IconProps) =>
+	svg(
+		<>
+			<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+			<circle cx="5.5" cy="4.5" r="1.3" fill="var(--pmr-bg-surface, #111)" />
+			<circle cx="10.5" cy="8" r="1.3" fill="var(--pmr-bg-surface, #111)" />
+			<circle cx="7" cy="11.5" r="1.3" fill="var(--pmr-bg-surface, #111)" />
+		</>,
+		size,
+	);
+
 export const ChevronIcon = ({ size = 10, open = true }: IconProps & { open?: boolean }) =>
 	svg(<path d={open ? "M3 6l4 4 4-4" : "M6 3l4 4-4 4"} />, size, "0 0 14 14");
 

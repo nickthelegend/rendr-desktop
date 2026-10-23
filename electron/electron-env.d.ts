@@ -217,10 +217,36 @@ interface Window {
 			error?: string;
 		}) => void;
 
-		// ── Claude CLI ──────────────────────────────────────────────────
-		claudeStatus: () => Promise<{ available: boolean; version?: string; reason?: string }>;
-		claudeSend: (prompt: string) => void;
-		claudeCancel: () => void;
+		// ── Agent chat ──────────────────────────────────────────────────
+		agentCatalog: () => Promise<import("../src/palmier-ui/agentTypes").AgentCatalog>;
+		agentStatus: () => Promise<import("../src/palmier-ui/agentTypes").AgentStatusInfo>;
+		agentGetSettings: () => Promise<import("../src/palmier-ui/agentTypes").AgentSettingsView>;
+		agentSetSettings: (
+			patch: import("../src/palmier-ui/agentTypes").AgentSettingsPatch,
+		) => Promise<import("../src/palmier-ui/agentTypes").AgentSettingsView>;
+		agentSetKey: (
+			key: string,
+		) => Promise<import("../src/palmier-ui/agentTypes").AgentSettingsView>;
+		agentSend: (prompt: string) => void;
+		agentCancel: () => void;
+		agentReset: () => void;
+		onAgentEvent: (callback: (event: unknown) => void) => () => void;
+
+		// ── Rendr Connect ───────────────────────────────────────────────
+		connectState: () => Promise<import("../src/palmier-ui/agentTypes").ConnectStateView>;
+		connectInstall: (
+			clientId: string,
+		) => Promise<import("../src/palmier-ui/agentTypes").ConnectActionResult>;
+		connectInstallCli: () => Promise<
+			import("../src/palmier-ui/agentTypes").ConnectActionResult
+		>;
+		connectRemoteStart: (options: {
+			mode: "cloudflared" | "manual";
+			origin?: string;
+		}) => Promise<import("../src/palmier-ui/agentTypes").ConnectStateView>;
+		connectRemoteStop: () => Promise<import("../src/palmier-ui/agentTypes").ConnectStateView>;
+		connectRotateToken: () => Promise<import("../src/palmier-ui/agentTypes").ConnectStateView>;
+		onConnectChanged: (callback: (state: unknown) => void) => () => void;
 		transcribeAudio: (
 			url: string,
 			name: string,
@@ -231,7 +257,6 @@ interface Window {
 			engine?: string;
 			reason?: string;
 		}>;
-		onClaudeEvent: (callback: (event: unknown) => void) => () => void;
 
 		hudOverlaySetIgnoreMouse: (ignore: boolean) => void;
 		hudOverlaySetSourceSelectionActive: (active: boolean) => void;
