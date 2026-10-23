@@ -332,3 +332,59 @@ describe("add_punch_ins", () => {
 		expect(clips[1]).toBe(authored);
 	});
 });
+
+describe("find_retakes", () => {
+	it("reports abandoned takes from the captions without cutting anything", async () => {
+		const spoken = [
+			"So",
+			"today",
+			"we're",
+			"going",
+			"so",
+			"today",
+			"we're",
+			"going",
+			"to",
+			"edit.",
+		];
+		const caption = withDefaults({
+			id: "cap",
+			name: "Captions",
+			mediaType: "text",
+			startFrame: 0,
+			endFrame: 300,
+			captionGroupId: "g",
+			captionWords: spoken.map((text, index) => ({
+				text,
+				startFrame: index * 10 + (index >= 4 ? 30 : 0),
+				endFrame: index * 10 + 8 + (index >= 4 ? 30 : 0),
+			})),
+		});
+		const start = timelineWith([footageClip()]);
+		start.tracks.unshift({
+			id: "trk-cc-g",
+			name: "CC",
+			kind: "video",
+			muted: false,
+			hidden: false,
+			clips: [caption],
+		});
+		const { api, commit } = fakeApi(start);
+		const result = await createCreatorTools(api).find_retakes({});
+		const body = payload(result);
+		expect(body.retakes).toEqual([
+			expect.objectContaining({
+				kind: "restart",
+				words: [0, 3],
+				removed: "So today we're going",
+			}),
+		]);
+		expect(commit).not.toHaveBeenCalled();
+	});
+
+	it("asks for captions when there's no transcript", async () => {
+		const { api } = fakeApi(timelineWith([footageClip()]));
+		const result = await createCreatorTools(api).find_retakes({});
+		expect(payload(result).error).toBe("no_transcript");
+	});
+});

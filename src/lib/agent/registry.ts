@@ -132,6 +132,7 @@ export const DECLARED_TOOLS = [
 	"remove_background",
 	"add_graphic",
 	"add_punch_ins",
+	"find_retakes",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */

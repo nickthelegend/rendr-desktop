@@ -55,7 +55,7 @@ export const RECIPES: Recipe[] = [
 
 1. get_timeline, then get_media. If the footage isn't on a timeline yet, add_clips it at frame 0.
 2. analyze_footage on the footage asset — it tells you whether it's really a talking head and where the face is.
-3. remove_silence to cut the dead air (preview first if it's long), then get_transcript and remove_words for filler words ("um", "uh", "like", false starts and repeated takes — keep the LAST take of a repeated sentence).
+3. remove_silence to cut the dead air (preview first if it's long). add_captions so there's a transcript, then find_retakes (check the list, then apply:true) to drop abandoned takes and stutters, and remove_words with matches ["um", "uh"] for fillers.
 4. add_punch_ins (style 'cut', amount ~1.15) so every other cut punches in on the face.
 5. add_captions, then style_captions with the ${args.style === "bold" ? "bold, word-by-word Shorts look" : "clean, readable YouTube look"}.
 6. normalize_audio to -14 LUFS.${args.music ? ` Add "${args.music}" on an audio track under the whole edit at about -18 dB, then duck_audio under the speech.` : ""}

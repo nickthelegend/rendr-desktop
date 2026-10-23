@@ -4,7 +4,8 @@
 // Merged with createAgentTools by useAgentBridge, so they answer over the same
 // MCP bridge and land in the same undo history as every other edit.
 
-import type { ToolHandler, ToolResult } from "./agentTools";
+import { createAgentTools, type ToolHandler, type ToolResult } from "./agentTools";
+import { transcriptWords } from "./captions";
 import {
 	footageUnder,
 	type GraphicLayer,
@@ -36,6 +37,7 @@ import {
 } from "./punchIns";
 import type { TimelineModel } from "./reducers";
 import { findClip } from "./reducers";
+import { findRetakes } from "./retakes";
 import type { EditorApi } from "./state";
 import { compactFaceTrack, type FootageAnalysis, faceCoverage, typicalFace } from "./vision";
 
@@ -676,6 +678,57 @@ export function createCreatorTools(api: EditorApi): Record<string, ToolHandler> 
 						? `${withoutFace} segment(s) had no face track, so the push aims at the upper middle. Run analyze_footage for face-centred punch-ins.`
 						: undefined,
 			}));
+		},
+
+		async find_retakes(args: Record<string, unknown>): Promise<ToolResult> {
+			const groupId = asString(args.captionGroupId) ?? undefined;
+			const words = transcriptWords(timeline, groupId);
+			if (words.length === 0) {
+				return fail(
+					"no_transcript",
+					"There's no transcript yet. Run add_captions first — retakes are found in what was said.",
+				);
+			}
+			const retakes = findRetakes(words, {
+				fps: timeline.fps,
+				minMatch: typeof args.minMatch === "number" ? args.minMatch : undefined,
+				maxGapSeconds:
+					typeof args.maxGapSeconds === "number" ? args.maxGapSeconds : undefined,
+			}).filter((retake) => args.include !== "restarts" || retake.kind === "restart");
+			const seconds = retakes.reduce(
+				(sum, retake) => sum + (retake.endFrame - retake.startFrame) / timeline.fps,
+				0,
+			);
+			const report = retakes.map((retake) => ({
+				kind: retake.kind,
+				words: [retake.removeFrom, retake.removeTo],
+				removed: retake.removedText,
+				kept: retake.keptText,
+				atFrame: retake.startFrame,
+			}));
+			if (args.apply !== true || retakes.length === 0) {
+				return ok({
+					retakes: report,
+					totalSeconds: Math.round(seconds * 10) / 10,
+					note:
+						retakes.length === 0
+							? "No retakes found."
+							: "Nothing was cut yet. Check the list, then call again with apply:true — or pass chosen spans to remove_words yourself.",
+				});
+			}
+			// One remove_words call, so the whole clean-up is one undo step and the
+			// captions are rebuilt once.
+			const result = await createAgentTools(api).remove_words({
+				words: retakes.map((retake) => [retake.removeFrom, retake.removeTo]),
+				cutAggressiveness: asString(args.cutAggressiveness) ?? "balanced",
+			});
+			if (result.isError) return result;
+			return ok({
+				applied: true,
+				retakes: report,
+				totalSeconds: Math.round(seconds * 10) / 10,
+				note: "Cut. Transcript indices have changed — re-read get_transcript before any further remove_words.",
+			});
 		},
 
 		async remove_background(args: Record<string, unknown>): Promise<ToolResult> {

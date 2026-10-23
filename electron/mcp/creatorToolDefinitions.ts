@@ -171,4 +171,34 @@ export const CREATOR_TOOLS: AgentTool[] = [
 			mode: { type: "string", enum: ["on", "off"] },
 		}),
 	},
+	{
+		name: "find_retakes",
+		description:
+			"Finds retakes in the transcript: lines the speaker started, abandoned and said again ('so today we're— so today we're going to…'), and stutters ('I think I think'). Proposes cutting the EARLIER attempt and keeping the last one, which is what an editor does. Needs captions (add_captions) — it reads the same transcript get_transcript shows.\n\nBy default it only reports, with the removed and kept text side by side; pass apply:true to cut them all in one undoable remove_words step. Run it after remove_silence and before add_punch_ins.",
+		inputSchema: object({
+			apply: {
+				type: "boolean",
+				description: "Cut what was found. Default false: report only.",
+			},
+			include: {
+				type: "string",
+				enum: ["all", "restarts"],
+				description: "'restarts' skips phrase stutters. Default 'all'.",
+			},
+			minMatch: {
+				type: "number",
+				description:
+					"Opening words that must repeat to count as a restart. Default 3; raise to be more conservative.",
+			},
+			maxGapSeconds: {
+				type: "number",
+				description: "How far apart two attempts can be. Default 25.",
+			},
+			captionGroupId: {
+				type: "string",
+				description: "Which transcript, when there are several caption groups.",
+			},
+			cutAggressiveness: { type: "string", enum: ["tight", "balanced", "loose"] },
+		}),
+	},
 ];
