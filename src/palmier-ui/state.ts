@@ -754,6 +754,46 @@ export function useEditorState() {
 		}));
 	}, []);
 
+	/**
+	 * Records what footage analysis found: links the person matte as a hidden
+	 * asset and keeps the face track on the footage. A matte from an earlier run
+	 * (offline after a reopen, say) is replaced in place, so clips that already
+	 * ask for a removed background pick the new file up without being touched.
+	 */
+	const attachAnalysis = useCallback(
+		(
+			footageAssetId: string,
+			matte: AssetModel | null,
+			analysis: Pick<AssetModel, "faceTrack" | "personCoverage">,
+		) => {
+			setState((current) => {
+				const footage = current.assets.find((asset) => asset.id === footageAssetId);
+				if (!footage) return current;
+				const previousMatteId = footage.matteAssetId;
+				const matteAsset = matte
+					? { ...matte, id: previousMatteId ?? matte.id, isMatte: true, offline: false }
+					: null;
+				const assets = current.assets
+					.filter((asset) => !(matteAsset && asset.id === matteAsset.id))
+					.map((asset) =>
+						asset.id === footageAssetId
+							? {
+									...asset,
+									...analysis,
+									matteAssetId: matteAsset?.id ?? asset.matteAssetId,
+								}
+							: asset,
+					);
+				return {
+					...current,
+					assets: matteAsset ? [...assets, matteAsset] : assets,
+					dirty: true,
+				};
+			});
+		},
+		[],
+	);
+
 	const renameAsset = useCallback((assetId: string, name: string) => {
 		const trimmed = name.trim();
 		if (!trimmed) return;
@@ -1931,6 +1971,7 @@ export function useEditorState() {
 		addAssets,
 		removeAsset,
 		pairCamera,
+		attachAnalysis,
 		renameAsset,
 		placeAsset,
 		moveAssets,

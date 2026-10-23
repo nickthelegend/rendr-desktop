@@ -50,6 +50,7 @@ import {
 	setupAutoUpdates,
 	skipAvailableUpdateVersion,
 } from "./updater";
+import { registerVision } from "./vision";
 import {
 	closeRendrBarWindow,
 	createEditorWindow,
@@ -1179,6 +1180,8 @@ app.whenReady().then(async () => {
 	// Rendr as a connector: client setup, remote access, REST and OpenAPI.
 	registerConnect();
 	registerTranscribe();
+	// Person mattes and face tracks for camera footage, made on-device.
+	registerVision(() => editorWindowRef ?? mainWindow);
 
 	// Agent surface: local MCP server. Failure to bind never blocks the app.
 	void startMcpServer({

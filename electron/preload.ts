@@ -209,6 +209,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("rendr-connect:changed", listener);
 		return () => ipcRenderer.removeListener("rendr-connect:changed", listener);
 	},
+	analyzeFootage: async (
+		url: string,
+		request: { name: string; quality?: "fast" | "balanced" | "accurate" },
+	) => {
+		// Same handoff as transcription: the renderer owns the blob, main sees bytes.
+		const bytes = await (await fetch(url)).arrayBuffer();
+		return ipcRenderer.invoke("rendr-vision:analyze", bytes, request);
+	},
+	onFootageProgress: (callback: (event: { name: string; progress: number }) => void) => {
+		const listener = (
+			_event: Electron.IpcRendererEvent,
+			payload: { name: string; progress: number },
+		) => callback(payload);
+		ipcRenderer.on("rendr-vision:progress", listener);
+		return () => ipcRenderer.removeListener("rendr-vision:progress", listener);
+	},
 	transcribeAudio: async (url: string, name: string) => {
 		// The renderer owns the blob; the main process only ever sees bytes.
 		const bytes = await (await fetch(url)).arrayBuffer();

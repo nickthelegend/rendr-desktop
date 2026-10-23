@@ -31,6 +31,7 @@ import { applyLuts, buildChannelLuts, type ChannelLuts } from "./curves";
 import { clipFilter } from "./effects";
 import type { FrameSource } from "./frameSource";
 import { clipAtFrame, clipOpacityAt } from "./keyframes";
+import { drawMatted } from "./matte";
 import type { AssetModel } from "./media";
 import { audioBufferToWav, renderTimelineAudio } from "./mixdown";
 import { applyPixelGrade, needsPixelGrade, type PixelGrade } from "./pixelGrade";
@@ -148,6 +149,8 @@ export interface DecodedSources {
 	 * cursor than through a seek per frame. Absent means "seek".
 	 */
 	frames?: Map<string, FrameSource>;
+	/** Footage asset id → its person matte's asset id, for background removal. */
+	mattes?: Map<string, string>;
 }
 
 export async function decodeSources(assets: readonly AssetModel[]): Promise<DecodedSources> {
@@ -184,7 +187,13 @@ export async function decodeSources(assets: readonly AssetModel[]): Promise<Deco
 			),
 	);
 
-	return { video, image };
+	const mattes = new Map<string, string>();
+	for (const asset of assets) {
+		if (asset.matteAssetId && video.has(asset.matteAssetId))
+			mattes.set(asset.id, asset.matteAssetId);
+	}
+
+	return { video, image, mattes };
 }
 
 /** Seeks a video and waits for the frame to actually be ready. */
@@ -546,17 +555,47 @@ export async function renderFrame(
 					context.beginPath();
 					context.rect(0, 0, boxW, boxH);
 					context.clip();
-					context.drawImage(
-						source,
-						sx,
-						sy,
-						sw,
-						sh,
-						(boxW - drawW) / 2,
-						(boxH - drawH) / 2,
-						drawW,
-						drawH,
-					);
+					const matte = clip.background
+						? await matteFrameFor(clip.assetId ?? "", sourceMs, sources)
+						: null;
+					if (clip.background && matte) {
+						// The grade belongs to the person and a blurred backdrop, not
+						// to a flat colour behind them, so drawMatted applies it itself.
+						const gradeFilter = context.filter;
+						context.filter = "none";
+						drawMatted(context, {
+							source,
+							matte,
+							crop,
+							dest: {
+								x: (boxW - drawW) / 2,
+								y: (boxH - drawH) / 2,
+								width: drawW,
+								height: drawH,
+							},
+							boxWidth: boxW,
+							boxHeight: boxH,
+							background: clip.background,
+							backgroundImage: clip.background.imageAssetId
+								? (sources.image.get(clip.background.imageAssetId) ?? null)
+								: null,
+							pixelScale: height / 1080,
+							gradeFilter,
+						});
+						context.filter = gradeFilter;
+					} else {
+						context.drawImage(
+							source,
+							sx,
+							sy,
+							sw,
+							sh,
+							(boxW - drawW) / 2,
+							(boxH - drawH) / 2,
+							drawW,
+							drawH,
+						);
+					}
 					if (luts || pixels) {
 						applyLutsToRegion(context, boxW, boxH, luts, pixels);
 					}
@@ -600,6 +639,26 @@ export async function renderFrame(
 	}
 
 	context.restore();
+}
+
+/**
+ * The person matte's frame at the footage's source time — decoded when a
+ * decoder took the matte, otherwise from its seeked <video>. Null when the
+ * footage has no matte yet, so the caller draws it untouched.
+ */
+async function matteFrameFor(
+	footageAssetId: string,
+	sourceMs: number,
+	sources: DecodedSources,
+): Promise<CanvasImageSource | null> {
+	const matteId = sources.mattes?.get(footageAssetId);
+	if (!matteId) return null;
+	const decoded = (await sources.frames?.get(matteId)?.frameAt(sourceMs / 1000)) ?? null;
+	if (decoded) return decoded;
+	const element = sources.video.get(matteId);
+	if (!element) return null;
+	await seek(element, sourceMs / 1000);
+	return element;
 }
 
 /**

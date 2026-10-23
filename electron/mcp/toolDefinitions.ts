@@ -3,6 +3,8 @@
 // Tool names, JSON Schemas, and descriptions are transcribed near-verbatim; the product
 // name is Rendr and the recording/zoom tools at the bottom are Rendr's own. See NOTICE.md.
 
+import { CREATOR_TOOLS } from "./creatorToolDefinitions";
+
 export type JsonSchema = Record<string, unknown>;
 
 export interface AgentTool {
@@ -3395,6 +3397,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...AUDIO_TOOLS,
 	...FINISH_TOOLS,
 	...HEADLESS_TOOLS,
+	...CREATOR_TOOLS,
 ];
 
 export const TOOLS_BY_NAME = new Map(MCP_TOOLS.map((tool) => [tool.name, tool]));

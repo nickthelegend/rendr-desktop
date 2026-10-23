@@ -38,6 +38,12 @@ export interface AssetManifestEntry {
 	/** The camera take recorded with this one, if any. */
 	webcamAssetId?: string;
 	isWebcam?: boolean;
+	/** The person matte made from this footage, and the matte itself. */
+	matteAssetId?: string;
+	isMatte?: boolean;
+	/** Small enough to keep inline; re-analysing a long take costs minutes. */
+	faceTrack?: AssetModel["faceTrack"];
+	personCoverage?: number;
 }
 
 export interface ProjectFile {
@@ -87,6 +93,12 @@ export function toManifest(asset: AssetModel): AssetManifestEntry {
 		// composites no camera even after both files are relinked.
 		webcamAssetId: asset.webcamAssetId,
 		isWebcam: asset.isWebcam,
+		// Likewise the matte: without the pairing a reopened project loses its
+		// removed backgrounds even once the files are back.
+		matteAssetId: asset.matteAssetId,
+		isMatte: asset.isMatte,
+		faceTrack: asset.faceTrack,
+		personCoverage: asset.personCoverage,
 	};
 }
 

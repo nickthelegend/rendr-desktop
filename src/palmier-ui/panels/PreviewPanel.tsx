@@ -55,6 +55,7 @@ import {
 	resolveCamera,
 	springCamera,
 } from "../zoom";
+import { ClipMattedCanvas } from "./ClipMattedCanvas";
 
 const BLEND_CSS: Record<ClipModel["blendMode"], string> = {
 	normal: "normal",
@@ -745,6 +746,17 @@ export function PreviewPanel({
 									const asset = state.assets.find(
 										(entry) => entry.id === clip.assetId,
 									);
+									// A removed background needs the footage's matte on hand;
+									// without one the clip plays as shot, as it would export.
+									const matteAsset =
+										clip.background && asset?.matteAssetId
+											? state.assets.find(
+													(entry) =>
+														entry.id === asset.matteAssetId &&
+														!entry.offline &&
+														entry.url,
+												)
+											: undefined;
 									return (
 										<div
 											key={clip.id}
@@ -763,7 +775,11 @@ export function PreviewPanel({
 														? `radial-gradient(ellipse at center, #000 ${100 - clip.edgeSoftness * 60}%, transparent 100%)`
 														: undefined,
 												overflow: "hidden",
-												filter: clipFilter(clip, true),
+												// A matted clip grades itself, so a flat
+												// backdrop colour stays the colour asked for.
+												filter: matteAsset
+													? "none"
+													: clipFilter(clip, true),
 											}}
 										>
 											<div
@@ -877,6 +893,30 @@ export function PreviewPanel({
 															</div>
 														);
 													})()
+												) : asset && matteAsset && clip.background ? (
+													<ClipMattedCanvas
+														url={asset.url}
+														matteUrl={matteAsset.url}
+														background={clip.background}
+														backgroundImageUrl={
+															clip.background.imageAssetId
+																? state.assets.find(
+																		(entry) =>
+																			entry.id ===
+																			clip.background
+																				?.imageAssetId,
+																	)?.url
+																: undefined
+														}
+														gradeFilter={clipFilter(clip, true)}
+														sourceSeconds={
+															frameToClipSourceMs(
+																clip,
+																state.playhead,
+																fps,
+															) / 1000
+														}
+													/>
 												) : asset && needsPixelGrade(clip.color) ? (
 													// Hue curves or a LUT: no CSS filter
 													// can express either, so this frame

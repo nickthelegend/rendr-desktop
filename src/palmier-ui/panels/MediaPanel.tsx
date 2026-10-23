@@ -96,10 +96,12 @@ export function MediaPanel({ api, onRecordClick }: { api: EditorApi; onRecordCli
 	// Filtering is a plain substring match on the name; the library is small
 	// enough that anything cleverer would be harder to predict.
 	const needle = query.trim().toLowerCase();
+	// Person mattes are tools the compositor reads, not media to place.
+	const libraryAssets = state.assets.filter((asset) => !asset.isMatte);
 	// A search looks through the whole library; browsing shows one folder.
 	const visible = needle
-		? state.assets.filter((asset) => asset.name.toLowerCase().includes(needle))
-		: state.assets.filter((asset) => (asset.folder ?? "") === folder);
+		? libraryAssets.filter((asset) => asset.name.toLowerCase().includes(needle))
+		: libraryAssets.filter((asset) => (asset.folder ?? "") === folder);
 
 	const prefix = folder ? `${folder}/` : "";
 	const subfolders = needle

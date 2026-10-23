@@ -36,7 +36,7 @@ export function parseBlocks(text: string): Block[] {
 		const line = raw.trimEnd();
 		const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
 		const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
-		const current = blocks.at(-1);
+		const current = blocks[blocks.length - 1];
 		if (bullet || numbered) {
 			const kind = bullet ? "ul" : "ol";
 			const item = (bullet ?? numbered)?.[1] ?? "";

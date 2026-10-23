@@ -9,6 +9,7 @@ import type { ZoomFocus } from "@/components/video-editor/types";
 import { type ColorBalance, hasBalance, hasCurves, type ToneCurves } from "./curves";
 import type { AppliedEffect } from "./effects";
 import type { KeyframeTracks } from "./keyframes";
+import type { ClipBackground } from "./matte";
 import { type CubeLut, type HueCurves, needsPixelGrade } from "./pixelGrade";
 
 export type MediaType = "video" | "audio" | "image" | "text" | "sequence";
@@ -152,6 +153,11 @@ export interface ClipModel {
 	effects?: AppliedEffect[];
 	/** Animated properties, clip-relative. Absent means "static value only". */
 	keyframes?: KeyframeTracks;
+	/**
+	 * Background removal or replacement, for camera footage. Needs the asset's
+	 * person matte (analyze_footage); without one the footage draws as is.
+	 */
+	background?: ClipBackground;
 
 	// Text
 	content?: string;

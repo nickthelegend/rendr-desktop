@@ -247,6 +247,13 @@ interface Window {
 		connectRemoteStop: () => Promise<import("../src/palmier-ui/agentTypes").ConnectStateView>;
 		connectRotateToken: () => Promise<import("../src/palmier-ui/agentTypes").ConnectStateView>;
 		onConnectChanged: (callback: (state: unknown) => void) => () => void;
+		analyzeFootage: (
+			url: string,
+			request: { name: string; quality?: "fast" | "balanced" | "accurate" },
+		) => Promise<import("../src/palmier-ui/vision").FootageAnalysis>;
+		onFootageProgress: (
+			callback: (event: { name: string; progress: number }) => void,
+		) => () => void;
 		transcribeAudio: (
 			url: string,
 			name: string,

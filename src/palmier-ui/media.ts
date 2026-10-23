@@ -2,6 +2,8 @@
 // recording; each one is probed for its actual duration and dimensions before
 // it enters the library, so the timeline never places a clip of guessed length.
 
+import type { FaceTrack } from "./vision";
+
 export type MediaKind = "video" | "audio" | "image";
 
 export interface AssetModel {
@@ -29,6 +31,18 @@ export interface AssetModel {
 	webcamAssetId?: string;
 	/** True for that camera take, so the library can label and group it. */
 	isWebcam?: boolean;
+	/**
+	 * The person matte made from this footage (see vision.ts): a hidden greyscale
+	 * video the compositor uses as the footage's alpha when a clip asks for its
+	 * background to be removed or replaced.
+	 */
+	matteAssetId?: string;
+	/** True for such a matte, so the library hides it — it is a tool, not media. */
+	isMatte?: boolean;
+	/** Where the speaker's face is through the footage, for reframing and punch-ins. */
+	faceTrack?: FaceTrack;
+	/** Share of the footage with a person in shot, from the same analysis. */
+	personCoverage?: number;
 	/**
 	 * Restored from a project file with no source behind it. Projects reference
 	 * media rather than embedding it, so an opened project needs relinking.
