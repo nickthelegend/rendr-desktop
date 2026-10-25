@@ -1,14 +1,18 @@
 // Transcription.
 //
-// Two engines, tried in order:
+// Engines, tried in the order transcribeEngines.ts sets out:
 //
-//   1. `hyperframes transcribe`, which returns WORD-level timestamps. That is
-//      what karaoke captions actually need — without it, word timing has to be
-//      guessed from character counts, and the highlight drifts off the speech.
-//   2. Recordly's bundled whisper.cpp, which returns cue-level timing only.
-//      Used when hyperframes isn't installed.
+//   1. whisper.cpp with full JSON output (`-ojf`), which carries per-token
+//      timestamps that whisperWords.ts merges into words. Fully offline once a
+//      model is on disk, so it goes first whenever one is.
+//   2. `hyperframes transcribe`, which also returns word-level timestamps but
+//      runs through npx and so needs the network on first use.
+//   3. whisper.cpp's cue-level timing, when the runtime is too old for `-ojf`
+//      and hyperframes isn't reachable. Karaoke timing is then inferred from
+//      character counts, which drifts — hence last.
 //
-// Both run locally. No audio leaves the machine either way.
+// Word timing is what karaoke captions and remove_words actually need. All of
+// these run locally; no audio leaves the machine either way.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -18,27 +22,20 @@ import path from "node:path";
 import { ipcMain } from "electron";
 
 import { resolveWhisperExecutablePath } from "./ipc/captions/generate";
-import { parseWhisperJsonCues } from "./ipc/captions/parser";
+import { parseWhisperJsonCues, shouldRetryWhisperWithoutJson } from "./ipc/captions/parser";
 import { getWhisperSmallModelStatus } from "./ipc/captions/whisper";
+import { parseWhisperFullJsonWords } from "./ipc/captions/whisperWords";
 import { getFfmpegBinaryPath } from "./ipc/ffmpeg/binary";
+import {
+	type LocalTranscript,
+	runTranscriptionEngines,
+	type TranscribedWord,
+	type TranscribeResult,
+} from "./transcribeEngines";
+
+export type { TranscribedWord, TranscribeResult } from "./transcribeEngines";
 
 export const TRANSCRIBE_CHANNEL = "rendr-transcribe:run";
-
-export interface TranscribedWord {
-	text: string;
-	startMs: number;
-	endMs: number;
-}
-
-export interface TranscribeResult {
-	ok: boolean;
-	/** Word-level timing when the engine provided it. */
-	words?: TranscribedWord[];
-	/** Cue-level fallback, when only cues were available. */
-	cues?: Array<{ id: string; startMs: number; endMs: number; text: string }>;
-	engine?: string;
-	reason?: string;
-}
 
 function run(
 	command: string,
@@ -94,9 +91,15 @@ async function transcribeWithHyperframes(
 	audioPath: string,
 	workDir: string,
 ): Promise<TranscribedWord[] | null> {
-	const result = await run("npx", ["--yes", "hyperframes", "transcribe", audioPath, "--json"], {
-		cwd: workDir,
-	});
+	let result: Awaited<ReturnType<typeof run>>;
+	try {
+		result = await run("npx", ["--yes", "hyperframes", "transcribe", audioPath, "--json"], {
+			cwd: workDir,
+		});
+	} catch {
+		// No npx on PATH (a packaged app launched from the Dock often has none).
+		return null;
+	}
 	if (result.code !== 0) return null;
 
 	const line = result.stdout
@@ -136,36 +139,115 @@ async function transcribeWithHyperframes(
 	}
 }
 
-/** Recordly's bundled whisper.cpp. Cue-level timing only. */
-async function transcribeWithWhisperCpp(wavPath: string): Promise<TranscribeResult["cues"] | null> {
-	const model = await getWhisperSmallModelStatus();
-	if (!model?.exists || !model.path) return null;
+/**
+ * A whisper.cpp model already on this machine, if there is one.
+ *
+ * Recordly's own download comes first. After that, the model hyperframes
+ * fetched for itself: it is the same ggml format, and reusing it means a
+ * creator who has transcribed once with hyperframes never needs the network
+ * for it again, nor a second half-gigabyte copy of the same model.
+ */
+async function findLocalWhisperModel(): Promise<string | null> {
+	const recordly = await getWhisperSmallModelStatus();
+	if (recordly?.exists && recordly.path) return recordly.path;
 
-	const whisper = await resolveWhisperExecutablePath();
-	if (!whisper) return null;
+	const candidates: string[] = [];
+	const override = process.env["WHISPER_CPP_MODEL"]?.trim();
+	if (override) candidates.push(override);
 
-	const result = await run(whisper, [
+	const hyperframesDir = path.join(os.homedir(), ".cache", "hyperframes", "whisper", "models");
+	try {
+		const entries = (await fs.readdir(hyperframesDir)).filter((name) =>
+			/^ggml-.+\.bin$/.test(name),
+		);
+		// Small first: it is the size Recordly ships, and the accuracy/speed
+		// balance the rest of the caption pipeline was tuned against.
+		entries.sort((a, b) => Number(b.includes("small")) - Number(a.includes("small")));
+		candidates.push(...entries.map((name) => path.join(hyperframesDir, name)));
+	} catch {
+		// No hyperframes cache.
+	}
+
+	for (const candidate of candidates) {
+		try {
+			const stat = await fs.stat(candidate);
+			// An interrupted download is a truncated file whisper would refuse to
+			// load, so it isn't offered. The smallest real model is ~75 MB.
+			if (stat.isFile() && stat.size > 10 * 1024 * 1024) return candidate;
+		} catch {
+			// Missing or unreadable — try the next one.
+		}
+	}
+	return null;
+}
+
+/**
+ * whisper.cpp, offline, with token timestamps merged into words.
+ *
+ * Null means it couldn't run at all (no model, no binary, or it failed). An
+ * outcome with no words and no cues means it ran and heard no speech.
+ */
+async function transcribeWithWhisperCpp(
+	wavPath: string,
+	workDir: string,
+): Promise<LocalTranscript | null> {
+	const modelPath = await findLocalWhisperModel();
+	if (!modelPath) return null;
+
+	let whisper: string;
+	try {
+		whisper = await resolveWhisperExecutablePath();
+	} catch {
+		// It throws, rather than returning null, when nothing is installed.
+		return null;
+	}
+
+	const outputBase = path.join(workDir, "whisper");
+	const baseArgs = [
 		"-m",
-		model.path,
+		modelPath,
 		"-f",
 		wavPath,
-		"--output-json",
-		"--max-len",
-		"0",
-	]);
+		"-of",
+		outputBase,
+		"-np",
+		// An English-only model can't detect a language; a multilingual one
+		// should, rather than transcribing every creator as English.
+		"-l",
+		/\.en\.bin$/i.test(modelPath) ? "en" : "auto",
+		"-t",
+		String(Math.max(1, Math.min(8, os.cpus().length))),
+	];
+
+	let result: Awaited<ReturnType<typeof run>>;
+	try {
+		result = await run(whisper, [...baseArgs, "-ojf"]);
+		if (result.code !== 0 && shouldRetryWhisperWithoutJson(result.stderr)) {
+			// A runtime from before `-ojf` still writes plain JSON with cue timing.
+			result = await run(whisper, [...baseArgs, "-oj"]);
+		}
+	} catch {
+		return null;
+	}
 	if (result.code !== 0) return null;
 
 	try {
-		const raw = await fs.readFile(`${wavPath}.json`, "utf8");
-		const cues = parseWhisperJsonCues(raw);
-		return cues.length > 0
-			? cues.map((cue, index) => ({
-					id: cue.id || String(index + 1),
-					startMs: cue.startMs,
-					endMs: cue.endMs,
-					text: cue.text,
-				}))
-			: null;
+		const raw = await fs.readFile(`${outputBase}.json`, "utf8");
+		const words = parseWhisperFullJsonWords(raw).map(({ text, startMs, endMs }) => ({
+			text,
+			startMs,
+			endMs,
+		}));
+		const cues = parseWhisperJsonCues(raw)
+			// "[BLANK_AUDIO]" is whisper describing silence, not a line of speech.
+			.filter((cue) => !/^\s*(\[[^\]]*\]|\([^)]*\)|[♪♫*\s]+)\s*$/.test(cue.text))
+			.map((cue, index) => ({
+				id: cue.id || String(index + 1),
+				startMs: cue.startMs,
+				endMs: cue.endMs,
+				text: cue.text,
+			}));
+		return { words, cues };
 	} catch {
 		return null;
 	}
@@ -181,19 +263,14 @@ export function registerTranscribe(): void {
 
 			try {
 				await fs.writeFile(sourcePath, Buffer.from(bytes));
+				// ffmpeg in the main process pulls the audio out of whatever the
+				// container is, so the engines only ever see 16 kHz mono PCM.
 				await toWhisperWav(sourcePath, wavPath);
 
-				// Word timing first — it's what karaoke needs.
-				const words = await transcribeWithHyperframes(wavPath, workDir);
-				if (words) return { ok: true, words, engine: "hyperframes" };
-
-				const cues = await transcribeWithWhisperCpp(wavPath);
-				if (cues) return { ok: true, cues, engine: "whisper.cpp" };
-
-				return {
-					ok: false,
-					reason: "No speech was found, and no transcription engine was available. Install the HyperFrames CLI (`npm i -g hyperframes`) or download the speech model in Settings.",
-				};
+				return await runTranscriptionEngines({
+					local: () => transcribeWithWhisperCpp(wavPath, workDir),
+					hyperframes: () => transcribeWithHyperframes(wavPath, workDir),
+				});
 			} catch (error) {
 				return {
 					ok: false,

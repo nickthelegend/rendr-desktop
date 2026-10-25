@@ -140,6 +140,36 @@ export function sampleTrack(
 }
 
 /**
+ * The position row that puts a box's centre at (`centerX`, `centerY`).
+ *
+ * Position rows carry the top-left corner, but every motion tool thinks in
+ * centres — a push stays on its subject, a slide comes to rest where the clip
+ * sits. Writing the centre straight into a row is what parked a Ken Burns "in"
+ * with the clip half off the frame, so the conversion lives next to the reader
+ * that undoes it rather than being redone (or forgotten) by each writer.
+ */
+export function positionRow(
+	centerX: number,
+	centerY: number,
+	width: number,
+	height: number,
+): [number, number] {
+	return [centerX - width / 2, centerY - height / 2];
+}
+
+/**
+ * The box size a clip will have at a clip-relative frame.
+ *
+ * A position row only means something against a size, and that size is the
+ * scale track's when there is one. A writer that assumed the static size would
+ * drift the centre whenever a scale animation ran underneath it.
+ */
+export function boxSizeAt(clip: ClipModel, frame: number): [number, number] {
+	const scale = sampleTrack(clip.keyframes?.scale, frame);
+	return scale ? [scale[0], scale[1]] : [clip.transform.width, clip.transform.height];
+}
+
+/**
  * A clip with its animated values substituted at `timelineFrame`.
  *
  * Returns the clip itself when nothing is animated, so the common path costs

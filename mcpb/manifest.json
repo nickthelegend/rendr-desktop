@@ -20,10 +20,10 @@
   },
   "server": {
     "type": "node",
-    "entry_point": "server/index.js",
+    "entry_point": "server/index.cjs",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/server/index.js"]
+      "args": ["${__dirname}/server/index.cjs"]
     }
   }
 }

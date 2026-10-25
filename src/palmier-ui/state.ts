@@ -51,6 +51,7 @@ import { forgetDecodedSources } from "./frames";
 import { type AssetModel, importFiles, normalizeFolder, releaseAsset } from "./media";
 import { forgetDenoised } from "./mixdown";
 import { type ClipModel, withDefaults } from "./model";
+import { adoptFootageFormat, DEFAULT_CANVAS, withFootageTrack } from "./placement";
 import {
 	clearAutosave,
 	downloadProject,
@@ -129,8 +130,17 @@ export interface CaptionPlacementOptions {
 	maxWords?: number | null;
 }
 
-/** Starts a render and hands back the job id `manage_exports` tracks. */
-export type ExporterHook = (settings: Record<string, unknown>) => Promise<string>;
+/**
+ * Starts a render and hands back the job id `manage_exports` tracks.
+ *
+ * `timeline`, when given, is rendered instead of the editor's own. The hook is
+ * registered by a render, so a caller that has just committed would otherwise
+ * export the timeline as that render saw it — the cut before its own commit.
+ */
+export type ExporterHook = (
+	settings: Record<string, unknown>,
+	timeline?: TimelineModel,
+) => Promise<string>;
 
 /** What EditorShell hands the agent tools so they can drive real capture. */
 export interface RecorderHooks {
@@ -253,7 +263,6 @@ export interface EditorState {
 	zoomTiming: ZoomTiming;
 }
 
-const FPS = 30;
 const UNDO_LIMIT = 100;
 const IMAGE_DEFAULT_SECONDS = 5;
 
@@ -263,7 +272,14 @@ function emptyTimeline(): TimelineModel {
 		{ id: "trk-v1", name: "V1", kind: "video", muted: false, hidden: false, clips: [] },
 		{ id: "trk-a1", name: "A1", kind: "audio", muted: false, hidden: false, clips: [] },
 	];
-	return { id: "tl-main", name: "Main", fps: FPS, width: 1920, height: 1080, tracks };
+	return {
+		id: "tl-main",
+		name: "Main",
+		fps: DEFAULT_CANVAS.fps,
+		width: DEFAULT_CANVAS.width,
+		height: DEFAULT_CANVAS.height,
+		tracks,
+	};
 }
 
 function initialState(): EditorState {
@@ -638,7 +654,15 @@ export function useEditorState() {
 
 	/** Import dropped or picked files, reporting anything that could not be read. */
 	const importMedia = useCallback(
-		async (files: readonly File[]): Promise<AssetModel[]> => {
+		async (
+			files: readonly File[],
+			/**
+			 * Relink exactly this offline asset with the (single) file, rather
+			 * than matching by name — two takes called IMG_0001.MOV must each get
+			 * their own file back.
+			 */
+			options: { relinkTo?: string } = {},
+		): Promise<AssetModel[]> => {
 			if (files.length === 0) return [];
 			const { assets, rejected } = await importFiles(files);
 			for (const reason of rejected) toast(reason, "error");
@@ -651,11 +675,21 @@ export function useEditorState() {
 			 * so the caller can't assume these are the freshly-read `assets`.
 			 */
 			const plan = (existing: readonly AssetModel[]) => {
-				const offline = existing.filter((asset) => asset.offline);
+				const offline = existing.filter(
+					(asset) =>
+						asset.offline && (!options.relinkTo || asset.id === options.relinkTo),
+				);
+				// Asked to relink one asset that's no longer waiting for its file:
+				// adding the file as new media would only duplicate it.
+				if (options.relinkTo && offline.length === 0) {
+					return { next: [...existing], landed: [], restored: 0 };
+				}
 				if (offline.length === 0) {
 					return { next: [...existing, ...assets], landed: assets, restored: 0 };
 				}
-				const { relinked, unmatched } = relinkAssets(offline, assets);
+				const { relinked, unmatched } = relinkAssets(offline, assets, {
+					pairExactly: Boolean(options.relinkTo),
+				});
 				const relinkedById = new Map(relinked.map((asset) => [asset.id, asset]));
 				return {
 					next: [
@@ -754,6 +788,46 @@ export function useEditorState() {
 		}));
 	}, []);
 
+	/**
+	 * Records what footage analysis found: links the person matte as a hidden
+	 * asset and keeps the face track on the footage. A matte from an earlier run
+	 * (offline after a reopen, say) is replaced in place, so clips that already
+	 * ask for a removed background pick the new file up without being touched.
+	 */
+	const attachAnalysis = useCallback(
+		(
+			footageAssetId: string,
+			matte: AssetModel | null,
+			analysis: Pick<AssetModel, "faceTrack" | "personCoverage">,
+		) => {
+			setState((current) => {
+				const footage = current.assets.find((asset) => asset.id === footageAssetId);
+				if (!footage) return current;
+				const previousMatteId = footage.matteAssetId;
+				const matteAsset = matte
+					? { ...matte, id: previousMatteId ?? matte.id, isMatte: true, offline: false }
+					: null;
+				const assets = current.assets
+					.filter((asset) => !(matteAsset && asset.id === matteAsset.id))
+					.map((asset) =>
+						asset.id === footageAssetId
+							? {
+									...asset,
+									...analysis,
+									matteAssetId: matteAsset?.id ?? asset.matteAssetId,
+								}
+							: asset,
+					);
+				return {
+					...current,
+					assets: matteAsset ? [...assets, matteAsset] : assets,
+					dirty: true,
+				};
+			});
+		},
+		[],
+	);
+
 	const renameAsset = useCallback((assetId: string, name: string) => {
 		const trimmed = name.trim();
 		if (!trimmed) return;
@@ -834,8 +908,14 @@ export function useEditorState() {
 	}, [state.assets]);
 
 	/**
-	 * Place an asset on the timeline at `atFrame`, on the first track of the
-	 * matching kind, clearing whatever it lands on as add_clips does.
+	 * Place an asset on the timeline at `atFrame`, clearing whatever it lands
+	 * on as add_clips does.
+	 *
+	 * Pictures go on the main footage track — never a caption or title track,
+	 * which are video tracks too and sit first in the stack, so "the first video
+	 * track" used to mean the captions and the drop deleted the ones it covered.
+	 * The first footage on an empty, untouched project also sets the project's
+	 * shape, so a vertical phone clip makes a vertical project.
 	 */
 	const placeAsset = useCallback(
 		(assetId: string, atFrame: number) => {
@@ -844,16 +924,24 @@ export function useEditorState() {
 
 			const seconds =
 				asset.durationSeconds > 0 ? asset.durationSeconds : IMAGE_DEFAULT_SECONDS;
-			const durationFrames = Math.max(1, Math.round(seconds * timeline.fps));
 			const start = Math.max(0, Math.round(atFrame));
 			const clipId = `clip-${assetId}-${start}`;
 
-			commit(`Add ${asset.name}`, (current) => {
+			commit(`Add ${asset.name}`, (before) => {
 				const wantsVideo = asset.type !== "audio";
-				const trackIndex = current.tracks.findIndex((track) =>
-					wantsVideo ? track.kind === "video" : track.kind === "audio",
-				);
-				if (trackIndex < 0) return current;
+				let current = wantsVideo ? adoptFootageFormat(before, asset) : before;
+				let trackIndex: number;
+				if (wantsVideo) {
+					const placed = withFootageTrack(current);
+					current = placed.timeline;
+					trackIndex = placed.index;
+				} else {
+					trackIndex = current.tracks.findIndex((track) => track.kind === "audio");
+				}
+				if (trackIndex < 0) return before;
+				// Measured at the rate the project ends up with, which the
+				// footage may just have set.
+				const durationFrames = Math.max(1, Math.round(seconds * current.fps));
 
 				const clip = withDefaults({
 					id: clipId,
@@ -884,7 +972,7 @@ export function useEditorState() {
 			});
 			setState((current) => ({ ...current, selectedClipIds: [clipId] }));
 		},
-		[commit, state.assets, timeline.fps],
+		[commit, state.assets],
 	);
 
 	// ── Project ───────────────────────────────────────────────────────
@@ -1170,9 +1258,9 @@ export function useEditorState() {
 		exporterHook.current = hook;
 	}, []);
 	const agentExport = useCallback(
-		(settings: Record<string, unknown>) =>
+		(settings: Record<string, unknown>, timeline?: TimelineModel) =>
 			exporterHook.current
-				? exporterHook.current(settings)
+				? exporterHook.current(settings, timeline)
 				: Promise.reject(new Error("The editor window isn't ready to export yet.")),
 		[],
 	);
@@ -1608,6 +1696,9 @@ export function useEditorState() {
 							? clipSourceMsToFrame(host, sourceMs, current.fps)
 							: (sourceMs / 1000) * current.fps,
 					style: placement.style as never,
+					// Supplied subtitles arrive as whole lines, so the word cap is
+					// applied here too, not only when a transcript is grouped.
+					wordsPerCaption: placement.maxWords ?? undefined,
 					// A transform's centreY is where the caption sits; the rest of
 					// the box is applied after placement, once the clips exist.
 					centerY:
@@ -1931,6 +2022,7 @@ export function useEditorState() {
 		addAssets,
 		removeAsset,
 		pairCamera,
+		attachAnalysis,
 		renameAsset,
 		placeAsset,
 		moveAssets,

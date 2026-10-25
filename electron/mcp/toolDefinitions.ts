@@ -3,6 +3,8 @@
 // Tool names, JSON Schemas, and descriptions are transcribed near-verbatim; the product
 // name is Rendr and the recording/zoom tools at the bottom are Rendr's own. See NOTICE.md.
 
+import { CREATOR_TOOLS } from "./creatorToolDefinitions";
+
 export type JsonSchema = Record<string, unknown>;
 
 export interface AgentTool {
@@ -55,15 +57,32 @@ export const VIDEO_LAYOUTS = [
 	"three_up",
 ] as const;
 
+// Must match TEXT_ANIMATIONS in src/palmier-ui/model.ts, which is what the
+// renderer implements; textStyle.test.ts holds the two together.
 export const TEXT_ANIMATIONS = [
 	"off",
 	"fade",
 	"slide_up",
 	"pop",
+	"bounce",
 	"typewriter",
 	"word_by_word",
 	"karaoke",
-	"bounce",
+] as const;
+
+/** Every caption look style_captions knows, in the order it describes them. */
+export const CAPTION_PRESET_NAMES = [
+	"bold_pop",
+	"highlight_box",
+	"two_tone",
+	"subtle",
+	"karaoke",
+	"shorts",
+	"pop",
+	"typewriter",
+	"clean",
+	"emphasis",
+	"plate",
 ] as const;
 
 function textBoxTransformProperties(): Record<string, JsonSchema> {
@@ -76,135 +95,227 @@ function textBoxTransformProperties(): Record<string, JsonSchema> {
 	};
 }
 
-const TEXT_STYLE_SCHEMA: JsonSchema = {
-	type: "object",
-	description: "Partial text-style patch. Omit properties to keep defaults or existing values.",
-	properties: {
-		fontName: { type: "string", description: "Font PostScript name." },
+const HEX_COLOR = "Hex colour: #RGB, #RRGGBB, or #RRGGBBAA.";
+
+/**
+ * Text style properties, flat, in the renderer's own names. Shared by the
+ * nested `style` object and style_captions' top-level fields, so the two can
+ * never describe different things.
+ */
+function textStyleProperties(): Record<string, JsonSchema> {
+	return {
+		fontFamily: {
+			type: "string",
+			description:
+				"Font family name, e.g. 'Inter'. Falls back to the system UI font when it isn't installed.",
+		},
 		fontSize: {
 			type: "number",
 			minimum: 12,
 			maximum: 300,
-			description: "Font size in canvas points.",
+			description:
+				"Font size in canvas points (the timeline's own pixels), so 64 on a 1080×1920 timeline is 64px of a 1920px-tall frame.",
 		},
-		widthScale: {
+		fontWeight: {
 			type: "number",
-			minimum: 0.5,
-			maximum: 2,
-			description: "Glyph width multiplier. 1 preserves the font's original width.",
+			minimum: 100,
+			maximum: 900,
+			description:
+				"100–900, overriding bold. 800–900 is the heavy short-form caption weight; bold alone is 700.",
 		},
-		heightScale: {
-			type: "number",
-			minimum: 0.5,
-			maximum: 2,
-			description: "Glyph height multiplier. 1 preserves the font's original height.",
+		bold: { type: "boolean", description: "Bold (700) when fontWeight is unset." },
+		italic: { type: "boolean", description: "Italic." },
+		uppercase: {
+			type: "boolean",
+			description: "Display in capitals; the text itself is kept.",
 		},
-		bold: { type: "boolean", description: "Bold font trait." },
-		italic: { type: "boolean", description: "Italic font trait." },
-		underline: { type: "boolean", description: "Draw a line below the text." },
-		strikethrough: { type: "boolean", description: "Draw a line through the text." },
-		overline: { type: "boolean", description: "Draw a line above the text." },
 		tracking: {
 			type: "number",
 			minimum: -20,
 			maximum: 100,
-			description: "Spacing between characters in canvas points.",
+			description: "Space added after every character, in canvas points.",
 		},
 		lineSpacing: {
 			type: "number",
 			minimum: -100,
 			maximum: 300,
-			description: "Additional spacing between lines in canvas points.",
+			description: "Extra space between lines, in canvas points. 0 is 1.15× the font size.",
 		},
-		fontCase: {
-			type: "string",
-			enum: ["mixed", "uppercase", "lowercase"],
-			description: "Non-destructive display casing.",
+		maxWidth: {
+			type: "number",
+			minimum: 0.1,
+			maximum: 1,
+			description:
+				"Lines wrap past this fraction of the text box's width. Default 0.92. Lower it to force shorter lines.",
+		},
+		wrap: {
+			type: "boolean",
+			description: "false keeps every line as written (only \\n breaks). Default true.",
 		},
 		alignment: {
 			type: "string",
 			enum: ["left", "center", "right"],
-			description: "Text alignment.",
+			description: "Line alignment within the text box.",
 		},
-		color: { type: "string", description: "Text color as #RGB, #RRGGBB, or #RRGGBBAA." },
+		color: { type: "string", description: `Text colour. ${HEX_COLOR}` },
+		animation: {
+			type: "string",
+			enum: [...TEXT_ANIMATIONS],
+			description:
+				"fade, slide_up, pop and bounce animate the whole block in; typewriter reveals characters; karaoke and word_by_word are per-word and need caption word timings. off clears.",
+		},
+		highlightColor: {
+			type: "string",
+			description: `Colour of the word being spoken under karaoke. ${HEX_COLOR}`,
+		},
+		spokenColor: {
+			type: "string",
+			description: `Karaoke: colour a word keeps once said, so the line fills in two tones. 'none' returns words to color. ${HEX_COLOR}`,
+		},
+		upcomingOpacity: {
+			type: "number",
+			minimum: 0,
+			maximum: 1,
+			description:
+				"Karaoke: opacity of words not yet said. Default 0.45; 1 shows the whole line at full strength.",
+		},
+		activeWordScale: {
+			type: "number",
+			minimum: 0.5,
+			maximum: 2,
+			description:
+				"karaoke / word_by_word: the spoken word pops to this scale (1.15 is the usual short-form value). 1 or absent is no pop.",
+		},
+		activeWordBackground: {
+			type: "string",
+			description: `karaoke / word_by_word: a rounded box of this colour behind the spoken word. 'none' removes it. ${HEX_COLOR}`,
+		},
+		strokeColor: {
+			type: "string",
+			description: `Outline colour around every glyph. 'none' removes the outline. ${HEX_COLOR}`,
+		},
+		strokeWidth: {
+			type: "number",
+			minimum: 0,
+			maximum: 40,
+			description:
+				"Outline width outside the glyphs, in canvas points. 4–8 suits 60–80pt captions.",
+		},
+		shadowColor: {
+			type: "string",
+			description: `Drop shadow colour; use #RRGGBBAA for opacity. 'none' removes it. ${HEX_COLOR}`,
+		},
+		shadowBlur: {
+			type: "number",
+			minimum: 0,
+			maximum: 100,
+			description: "Shadow blur, canvas points.",
+		},
+		shadowOffsetX: {
+			type: "number",
+			minimum: -200,
+			maximum: 200,
+			description: "Shadow offset right, canvas points.",
+		},
+		shadowOffsetY: {
+			type: "number",
+			minimum: -200,
+			maximum: 200,
+			description: "Shadow offset down, canvas points.",
+		},
+		backgroundColor: {
+			type: "string",
+			description: `A filled plate behind the whole text block. 'none' removes it. ${HEX_COLOR}`,
+		},
+		backgroundOpacity: {
+			type: "number",
+			minimum: 0,
+			maximum: 1,
+			description: "Plate opacity. Default 1.",
+		},
+		backgroundPadding: {
+			type: "number",
+			minimum: 0,
+			maximum: 1,
+			description: "Plate padding as a fraction of the font size. Default 0.35.",
+		},
+		backgroundRadius: {
+			type: "number",
+			minimum: 0,
+			maximum: 1,
+			description:
+				"Plate corner radius as a fraction of its height. Default 0.25; 0.5 is a pill.",
+		},
+	};
+}
+
+const TEXT_STYLE_SCHEMA: JsonSchema = {
+	type: "object",
+	description:
+		"Partial text-style patch; omitted properties keep their current values. Also accepted: fontName (= fontFamily), fontCase 'mixed'|'uppercase', and the grouped forms below. Keys Rendr can't draw are not stored — the result lists them in ignoredStyleKeys.",
+	properties: {
+		...textStyleProperties(),
+		fontName: { type: "string", description: "Alias of fontFamily." },
+		fontCase: {
+			type: "string",
+			enum: ["mixed", "uppercase"],
+			description: "Alias of uppercase.",
+		},
 		outline: {
 			type: "object",
+			description: "Grouped strokeColor/strokeWidth. {enabled: false} removes the outline.",
 			properties: {
 				enabled: { type: "boolean" },
-				color: { type: "string", description: "Outline color hex." },
+				color: { type: "string", description: "Outline colour. Default #000000." },
 				width: {
 					type: "number",
 					minimum: 0,
 					maximum: 40,
-					description: "Width in canvas points.",
+					description: "Width in canvas points. Default 4.",
 				},
 			},
 		},
 		shadow: {
 			type: "object",
+			description: "Grouped drop shadow. {enabled: false} removes it.",
 			properties: {
 				enabled: { type: "boolean" },
-				color: {
-					type: "string",
-					description: "Shadow color hex. Six-digit colors preserve the current opacity.",
-				},
-				opacity: { type: "number", minimum: 0, maximum: 1 },
+				color: { type: "string", description: "Shadow colour. Default #000000." },
+				opacity: { type: "number", minimum: 0, maximum: 1, description: "Default 0.6." },
 				offset: {
 					type: "object",
 					properties: {
 						x: { type: "number", minimum: -200, maximum: 200 },
 						y: { type: "number", minimum: -200, maximum: 200 },
 					},
+					description: "Canvas points. Default {x: 0, y: 4}.",
 				},
 				blur: {
 					type: "number",
 					minimum: 0,
 					maximum: 100,
-					description: "Blur radius in canvas points.",
+					description: "Blur radius in canvas points. Default 8.",
 				},
 			},
 		},
 		background: {
 			type: "object",
+			description: "Grouped plate fields. {enabled: false} removes the plate.",
 			properties: {
 				enabled: { type: "boolean" },
-				color: {
-					type: "string",
-					description:
-						"Background color hex. Six-digit colors preserve the current opacity.",
-				},
+				color: { type: "string", description: "Plate colour. Default #000000." },
 				opacity: { type: "number", minimum: 0, maximum: 1 },
 				padding: {
-					type: "object",
-					properties: {
-						x: { type: "number", minimum: 0, maximum: 300 },
-						y: { type: "number", minimum: 0, maximum: 300 },
-					},
-				},
-				center: {
-					type: "object",
-					properties: {
-						x: { type: "number", minimum: -500, maximum: 500 },
-						y: { type: "number", minimum: -500, maximum: 500 },
-					},
-				},
-				cornerRadius: {
 					type: "number",
 					minimum: 0,
-					maximum: 300,
-					description: "Corner radius in canvas points.",
+					maximum: 1,
+					description: "Fraction of the font size.",
 				},
-				outline: {
-					type: "object",
-					properties: {
-						color: { type: "string", description: "Background outline color hex." },
-						width: {
-							type: "number",
-							minimum: 0,
-							maximum: 40,
-							description: "Background outline width in canvas points.",
-						},
-					},
+				radius: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+					description: "Fraction of the plate's height.",
 				},
 			},
 		},
@@ -320,7 +431,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 	{
 		name: "export_project",
 		description:
-			"Queues an export from the current project using the same modes as the Export dialog. mode defaults to video. video renders H.264, H.265, or ProRes; xml writes XMEML timeline XML; fcpxml writes FCPXML; rendr writes a self-contained .rendr project package. For timeline interchange, pick the format by the target editor: Premiere Pro -> xml; DaVinci Resolve or Final Cut Pro -> fcpxml (fcpxml also carries text, transforms, crop, opacity, and keyframes that xml cannot). Video exports render zoom regions, edge softness, and edge rounding; Rendr project exports preserve them; xml/fcpxml interchange omits them. Omit outputPath to write a unique file to ~/Downloads. Existing direct outputPath files are overwritten by default to match the UI save flow; pass overwrite=false to refuse. Every mode returns status=started or status=queued with a jobId and destination path. Use manage_exports to check progress, warnings/results, or cancel by jobId.",
+			"Queues an export from the current project using the same modes as the Export dialog. mode defaults to video. video renders H.264, H.265, or ProRes; xml writes XMEML timeline XML; fcpxml writes FCPXML; rendr writes a self-contained .rendr project package. For a platform upload, pass preset (youtube, shorts, reels, tiktok, square) instead of picking a resolution; vertical presets need a 9:16 timeline, which reframe_timeline produces. For timeline interchange, pick the format by the target editor: Premiere Pro -> xml; DaVinci Resolve or Final Cut Pro -> fcpxml (fcpxml also carries text, transforms, crop, opacity, and keyframes that xml cannot). Video exports render zoom regions, edge softness, and edge rounding; Rendr project exports preserve them; xml/fcpxml interchange omits them. Omit outputPath to write a unique file to ~/Downloads. Existing direct outputPath files are overwritten by default to match the UI save flow; pass overwrite=false to refuse. Every mode returns status=started or status=queued with a jobId and destination path. Use manage_exports to check progress, warnings/results, or cancel by jobId.",
 		inputSchema: object({
 			mode: {
 				type: "string",
@@ -336,7 +447,14 @@ export const EDITING_TOOLS: AgentTool[] = [
 			resolution: {
 				type: "string",
 				enum: ["720p", "1080p", "2K", "4K", "Match Timeline"],
-				description: "Video mode only. Optional. Default Match Timeline.",
+				description:
+					"Video mode only. Optional. Default Match Timeline. Presets name the SHORT edge, so 1080p is 1920×1080 for a landscape timeline and 1080×1920 for a vertical one. 4K (2160 short edge) only when the timeline is at least that large; 2K is not offered. Mutually exclusive with preset.",
+			},
+			preset: {
+				type: "string",
+				enum: ["youtube", "shorts", "reels", "tiktok", "square"],
+				description:
+					"Video mode only. Optional. Sets resolution and bitrate for a platform: youtube = 16:9 at 1080p (4K when the timeline is 2160 or larger), 8 Mbps (12 above 30 fps; 40/60 at 4K); shorts, reels, tiktok = 9:16 at 1080×1920, 8 Mbps (12 above 30 fps); square = 1:1 at 1080×1080, 6 Mbps (9 above 30 fps). Refuses with error 'aspect_mismatch' — naming reframe_timeline and the aspect to pass it in `fix` — when the timeline isn't already that shape, rather than encoding a file the platform would letterbox. Mutually exclusive with resolution.",
 			},
 			outputPath: {
 				type: "string",
@@ -630,7 +748,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 	{
 		name: "add_clips",
 		description:
-			"Places one or more media assets on the timeline as a single undoable action. Each entry's asset type must be compatible with its target track (video/image are interchangeable across video/image tracks; audio requires an audio track). When a video asset with audio is placed on a video track, a linked audio clip is automatically created on an audio track (an existing one if available, otherwise a new one). The whole batch is one undo step.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates the needed tracks — one shared video track for visual entries (above existing visuals) and one shared audio track for audio entries (appended below existing audio, so linked dialogue on A1 stays put and music/VO land on A2+). To target existing tracks, set trackIndex on every entry. Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior.\n\nNESTING: mediaRef may also be a timelineId — the timeline is placed as a single live nested clip (mediaType 'sequence'), with a linked audio clip when the child has audio. Duration defaults to the child's full length; source and endFrame work as for video. Cycles (a timeline containing itself) and empty timelines are rejected.",
+			"Places one or more media assets on the timeline as a single undoable action. Each entry's asset type must be compatible with its target track (video/image are interchangeable across video/image tracks; audio requires an audio track). When a video asset with audio is placed on a video track, a linked audio clip is automatically created on an audio track (an existing one if available, otherwise a new one). The whole batch is one undo step.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates the needed tracks — one shared video track for visual entries (above existing visuals) and one shared audio track for audio entries (appended below existing audio, so linked dialogue on A1 stays put and music/VO land on A2+). To target existing tracks, set trackIndex on every entry. Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior. Visual entries go on the main footage track and never on a caption (CC) or title (T1) track, so placing footage cannot clear captions.\n\nThe first video placed on an empty project that is still at the default 1920×1080 @ 30 fps sets the project's resolution and frame rate from that footage (sizes rounded to even, held to a 2160 short edge; rates snapped to 24/25/30/50/60 etc.), so vertical phone footage makes a vertical project instead of being centre-cropped to 16:9. A project whose settings were changed, or that already has clips, keeps its own.\n\nNESTING: mediaRef may also be a timelineId — the timeline is placed as a single live nested clip (mediaType 'sequence'), with a linked audio clip when the child has audio. Duration defaults to the child's full length; source and endFrame work as for video. Cycles (a timeline containing itself) and empty timelines are rejected.",
 		inputSchema: object(
 			{
 				entries: {
@@ -1247,7 +1365,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 	{
 		name: "add_texts",
 		description:
-			"Adds text clips as timeline layers. Omit trackIndex on every entry to create one new top video track; otherwise set trackIndex on every entry. Transform is normalized text-box center/size; center-only auto-fits, all four fields override the box. Use the nested style object for typography, outline, shadow, and background. fillMode 'footage' stencils layers below through the letter shapes. Use add_captions for spoken audio captions. Unknown fields are rejected.",
+			"Adds text clips as timeline layers. Omit trackIndex on every entry to put them on one new top video track (a second new track only where entries overlap); otherwise set trackIndex on every entry and the span must be free on that track. Each entry's transform places its text box (normalized center/size); lines wrap to the box width. Each entry's style sets typography, outline, shadow, plate and animation — the same fields update_text takes. Style keys Rendr can't draw are not stored and come back in ignoredStyleKeys. Use add_captions for spoken audio captions.",
 		inputSchema: object(
 			{
 				entries: {
@@ -1259,7 +1377,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 							trackIndex: {
 								type: "integer",
 								description:
-									"Existing non-audio track. Omit on all entries to create a new top track.",
+									"Existing video track index (get_timeline). The entry's span must be free there. Omit on all entries to stack the text on new top tracks.",
 							},
 							startFrame: { type: "integer", description: "Timeline start frame." },
 							endFrame: {
@@ -1271,21 +1389,19 @@ export const EDITING_TOOLS: AgentTool[] = [
 							transform: {
 								type: "object",
 								description:
-									"Text box. Omit for centered auto-fit; rotation alone rotates an auto-fit box; center only auto-fits size; all four override.",
+									"Text box, normalized 0-1. Omitted fields keep the default full-frame centred box. Text is centred in the box and wraps at its width.",
 								properties: textBoxTransformProperties(),
 							},
 							style: TEXT_STYLE_SCHEMA,
 							animation: {
 								type: "string",
 								enum: [...TEXT_ANIMATIONS],
-								description: "Animation preset; off clears.",
-							},
-							highlightColor: { type: "string", description: "Active-word hex." },
-							fillMode: {
-								type: "string",
-								enum: ["color", "footage"],
 								description:
-									"color = solid typography (default). footage = stencil layers below through the letter shapes.",
+									"Animation preset; same as style.animation. off clears.",
+							},
+							highlightColor: {
+								type: "string",
+								description: "Active-word hex; same as style.highlightColor.",
 							},
 						},
 						required: ["startFrame", "endFrame", "content"],
@@ -1298,7 +1414,7 @@ export const EDITING_TOOLS: AgentTool[] = [
 	{
 		name: "update_text",
 		description:
-			"Updates text clips or a captionGroupId. The nested style object is a partial patch: omitted values stay unchanged. Use it for typography, color, outline, shadow, and background. fillMode 'footage' stencils layers below through the glyphs. Content and layout-affecting style changes auto-fit the box unless transform includes box geometry; rotation alone keeps auto-fit. Static rotation uses clockwise degrees and clears rotation keyframes. Unknown fields are rejected.",
+			"Updates text clips or a whole captionGroupId. The nested style object is a partial patch: omitted values stay unchanged. Use it for typography, colour, outline (strokeColor/strokeWidth), shadow, plate, line wrapping and the karaoke active-word treatment (activeWordScale, activeWordBackground, spokenColor). Style keys Rendr can't draw are not stored and come back in ignoredStyleKeys; invalid values fail the call. Changing a caption's content re-times its words across the clip.",
 		inputSchema: object({
 			clipIds: {
 				type: "array",
@@ -1316,38 +1432,53 @@ export const EDITING_TOOLS: AgentTool[] = [
 			animation: {
 				type: "string",
 				enum: [...TEXT_ANIMATIONS],
-				description: "Animation preset; off clears.",
+				description: "Animation preset; same as style.animation. off clears.",
 			},
-			highlightColor: { type: "string", description: "Active-word hex." },
-			fillMode: {
+			highlightColor: {
 				type: "string",
-				enum: ["color", "footage"],
-				description:
-					"color = solid typography. footage = stencil layers below through the letter shapes.",
+				description: "Active-word hex; same as style.highlightColor.",
 			},
 		}),
 	},
 	{
 		name: "add_captions",
 		description:
-			"Transcribes the timeline's spoken audio and creates styled caption text clips on their own track — no targeting needed; it finds the spoken content itself. Per-word animations are timed from the transcript. Returns the caption group summary (captionGroupId, clipCount, frameRange, shared style, textPreview) — restyle it later with update_text and that captionGroupId.",
+			"Transcribes the timeline's spoken audio and creates styled caption text clips on their own track — no targeting needed; it finds the spoken content itself. Per-word animations are timed from the transcript. Captions are placed by the timeline's shape: low in the frame for landscape, and in the lower-middle safe zone for vertical (9:16), above the bottom fifth that TikTok/Reels/Shorts UI covers. For the short-form look pass wordsPerCaption 2–3 and then style_captions preset 'bold_pop' or 'highlight_box'. Returns the caption group (captionGroupId) — restyle it later with style_captions or update_text.",
 		inputSchema: object({
 			language: { type: "string", description: "BCP-47 speech language." },
 			transform: {
 				type: "object",
-				description: "Caption box position; size is auto-fit per caption.",
-				properties: {
-					centerX: { type: "number", description: "0-1 horizontal center." },
-					centerY: { type: "number", description: "0-1 vertical center." },
-				},
+				description:
+					"Caption box, normalized 0-1. Omit for the aspect-aware default; lines wrap at the box width.",
+				properties: textBoxTransformProperties(),
 			},
-			censorProfanity: { type: "boolean", description: "Mask profanity." },
-			maxWords: { type: "integer", description: "Max words per caption." },
+			censorProfanity: {
+				type: "boolean",
+				description: "Not supported — true fails. Use remove_words with exact tokens.",
+			},
+			wordsPerCaption: {
+				type: "integer",
+				minimum: 1,
+				maximum: 20,
+				description:
+					"At most this many words on screen at once. 1–3 is the short-form (Shorts/Reels/TikTok) look; omit for subtitle-length lines. Applies to supplied subtitles too.",
+			},
+			maxWords: { type: "integer", description: "Alias of wordsPerCaption." },
+			subtitles: {
+				type: "string",
+				description:
+					"SRT or WebVTT text to place instead of transcribing. Word timing is inferred when the cues carry none.",
+			},
+			clipId: {
+				type: "string",
+				description:
+					"Clip whose audio to transcribe and whose timing the cues map through. Default: the first audio or video clip.",
+			},
 			style: TEXT_STYLE_SCHEMA,
 			animation: {
 				type: "string",
 				enum: [...TEXT_ANIMATIONS],
-				description: "Caption animation preset.",
+				description: "Caption animation preset; same as style.animation.",
 			},
 			highlightColor: { type: "string", description: "Active-word hex." },
 		}),
@@ -2091,21 +2222,27 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
 		name: "normalize_audio",
 		description:
-			"Measures each clip's actual loudness and sets its level to match a target, so a demo doesn't jump in volume between a screen recording and a narration line.\n\nThe average is taken over the audible passages only — a take with thirty seconds of silence at the head is not quiet, and averaging the silence in would push the gain far too high.\n\nGain is held back rather than clipping: if reaching the target would push the peak past the ceiling, it goes as far as it can and reports the shortfall, because reaching a target by clipping the transients is not reaching it. Call with measureOnly to read the levels without changing anything.\n\nThis is unweighted program RMS, not ITU-R BS.1770, so the figures are not LUFS and are not labelled as such. For matching clips from the same capture, which is what this is for, that is the number that matters. Undoable.",
+			"Measures each clip's integrated loudness (ITU-R BS.1770-4 / EBU R128, in LUFS) and sets its level to hit a platform target, so the voice lands where YouTube, TikTok, Instagram or a podcast app will play it rather than being turned down — or left quiet — by the platform.\n\nTargets: -14 LUFS for YouTube, TikTok, Instagram Reels and Spotify (the default); -16 for podcasts (Apple Podcasts' spec); -23 for EBU broadcast.\n\nMeasured over the part of each source the timeline actually plays, K-weighted and gated (-70 LUFS absolute, -10 LU relative), so silence and pauses don't inflate the gain. Every cut of the same take is measured together and gets one shared level, so a jump-cut talking-head edit doesn't step in volume between cuts. The measurement is of the raw source, so the result is an absolute level: running it twice changes nothing the second time. Existing volume keyframes (a duck) are moved by the same amount, keeping their shape.\n\nGain stops at the true-peak ceiling rather than clipping. Rendr has no limiter, so a take whose peaks would cross the ceiling is left as loud as the ceiling allows, and the result says how far short it landed (resultLufs, shortfallDb). Normalise music beds separately — about 10 LU under the voice, e.g. -24 LUFS — then duck_audio. Call with measureOnly, or use measure_audio, to read the figures without changing anything. Undoable.",
 		inputSchema: object({
 			clipIds: {
 				type: "array",
 				items: { type: "string" },
 				description: "Clips to normalise. Omit for every clip that carries audio.",
 			},
+			targetLufs: {
+				type: "number",
+				description:
+					"Integrated loudness to aim for, in LUFS, between -40 and -5. Default -14 (YouTube, TikTok, Instagram, Spotify). Use -16 for podcasts, -23 for EBU broadcast.",
+			},
 			targetDb: {
 				type: "number",
 				description:
-					"Program level to aim for, in dBFS. Default -18, which leaves room for a narration line on top.",
+					"Deprecated alias for targetLufs, kept so older prompts still work. Read as LUFS.",
 			},
 			ceilingDb: {
 				type: "number",
-				description: "Peak must not cross this. Default -1.",
+				description:
+					"True-peak ceiling in dBTP, between -12 and 0. Default -1, the usual delivery ceiling; -2 leaves more room for lossy encoders. Gain never pushes the 4x-oversampled peak past it.",
 			},
 			measureOnly: {
 				type: "boolean",
@@ -2117,7 +2254,7 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
 		name: "reframe_timeline",
 		description:
-			"Recomposes every visual clip for another aspect — 9:16 for vertical, 1:1 or 4:5 for square-ish feeds, 16:9 to go back. The project keeps its pixel size; what changes is the box the footage occupies, centred and cover-fitted, so a 16:9 screen recording reframed to 9:16 shows the middle of the screen at full height rather than a letterboxed miniature.\n\nThis is the one call that turns a landscape recording into something postable vertically. Text and captions are left alone, since they are already composed for the frame rather than cropped from a source. Undoable as one step.",
+			"Turns the ACTIVE timeline into another aspect — 9:16 for Shorts/Reels/TikTok, 1:1 or 4:5 for square-ish feeds, 16:9 to go back. The canvas itself changes: the new aspect is taken at the project's short edge, so a 1920×1080 project becomes 1080×1920 for 9:16 (3840×2160 becomes 2160×3840). Footage that filled the old frame is cover-fitted to the new one, centre-cropped by default, so a landscape talking head reframed to 9:16 keeps the middle of the shot at full height rather than being letterboxed. Insets keep their pixel size and stay inside the frame; existing position/scale keyframes are carried over relative to the picture.\n\nThis modifies the active timeline in place and is undoable as one step (undo restores the old canvas and framing). To keep the landscape cut alongside the vertical one, use batch_export instead, which builds each aspect as its own timeline with the same framing. Text and captions are left alone, since they are already composed for the frame rather than cropped from a source. The receipt reports the new resolution.",
 		inputSchema: object(
 			{
 				aspect: {
@@ -2128,7 +2265,7 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 				followCursor: {
 					type: "boolean",
 					description:
-						"Default true when the recording carries cursor telemetry. Pans the crop to keep the pointer in shot instead of holding the centre — a centred vertical crop of a screen recording often misses the sidebar or corner where the work is happening. The motion is smoothed, so it follows the subject rather than mirroring every flick, and clamped so no edge is ever exposed. Pass false to hold the centre.",
+						"Default true when the recording carries cursor telemetry (camera footage has none, so it is centre-cropped). Pans the crop to keep the pointer in shot instead of holding the centre — a centred vertical crop of a screen recording often misses the sidebar or corner where the work is happening. The motion is smoothed, so it follows the subject rather than mirroring every flick, and clamped so no edge is ever exposed. Pass false to hold the centre.",
 				},
 			},
 			["aspect"],
@@ -2137,12 +2274,25 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 	{
 		name: "duck_audio",
 		description:
-			"Drops a clip's level under the narration so speech stays intelligible over it — the mix problem every voiced demo has.\n\nBy default it ducks every clip that isn't narration, under every narration clip it finds, so a whole demo is balanced in one call. Pass clipIds to duck only those.\n\nWritten as volume keyframes rather than a separate audio stage, because those already drive both playback and the export mixdown: a duck is audible while scrubbing and present in the file, with no bake step. Each line gets four points — full, down, down, back up — because ramping is what stops a duck sounding like a gate. Lines closer together than two ramps duck once and stay down between them, so the bed doesn't pump.\n\nRun it again after re-narrating: it replaces the automation rather than layering more. Undoable.",
+			"Drops music and other beds under speech so the voice stays intelligible over them — the mix problem every voiced video has.\n\nTwo things to duck under. 'narration' ducks under the clips on the Narration track (narrate_timeline's TTS). 'speech' ducks under the creator's own voice in their footage: it listens to the camera audio (every clip on a video track, plus audio tracks named like a voice — Voice, Mic, Dialogue, VO), finds where someone is talking with a speech-band energy detector (pauses under 0.3 s bridged, clicks under 0.15 s ignored), and ducks the beds on the other audio tracks under exactly those spans, following each clip's trim and speed. 'auto' (the default) uses narration when there is any, otherwise speech — which is what a talking-head edit for YouTube, Shorts, Reels or TikTok wants.\n\nWritten as volume keyframes rather than a separate audio stage, because those already drive both playback and the export mixdown: a duck is audible while scrubbing and present in the file, with no bake step. Each span gets four points — full, down, down, back up — because ramping is what stops a duck sounding like a gate. Under speech the attack is short (0.15 s, so the bed is already down as the first word lands) and the release longer (0.6 s, so a breath between sentences doesn't swell the music); spans closer together than a release plus an attack duck once and stay down between them, so the bed doesn't pump.\n\nRun it again after re-narrating or re-cutting: it replaces the automation rather than layering more. Undoable.",
 		inputSchema: object({
+			under: {
+				type: "string",
+				enum: ["auto", "speech", "narration"],
+				description:
+					"What to duck under. 'speech': the voice detected in the footage's own audio. 'narration': the Narration track. 'auto' (default): narration if there is any, otherwise speech.",
+			},
 			clipIds: {
 				type: "array",
 				items: { type: "string" },
-				description: "Clips to duck. Omit to duck everything that isn't narration.",
+				description:
+					"Clips to duck. Omit to duck everything that isn't narration ('narration'), or every clip on an audio track that isn't a voice source ('speech').",
+			},
+			voiceClipIds: {
+				type: "array",
+				items: { type: "string" },
+				description:
+					"Speech mode only: the clips whose audio is the voice to listen to. Omit to use every unmuted video-track clip and voice-named audio track. Name them when b-roll with loud ambience would otherwise be read as talking.",
 			},
 			amountDb: {
 				type: "number",
@@ -2152,7 +2302,17 @@ export const CLIP_EDIT_TOOLS: AgentTool[] = [
 			rampFrames: {
 				type: "number",
 				description:
-					"Frames to ramp over, each side. Default 8 — about a quarter second at 30fps.",
+					"Frames to ramp over, each side, when attackFrames/releaseFrames aren't given. Default 8 under narration — about a quarter second at 30fps.",
+			},
+			attackFrames: {
+				type: "number",
+				description:
+					"Frames to ramp down over, ending as speech starts. Default 0.15 s worth under speech, rampFrames otherwise.",
+			},
+			releaseFrames: {
+				type: "number",
+				description:
+					"Frames to ramp back up over, starting when speech stops. Default 0.6 s worth under speech, rampFrames otherwise.",
 			},
 		}),
 	},
@@ -2243,7 +2403,7 @@ export const WORKFLOW_RUN_TOOLS: AgentTool[] = [
 	{
 		name: "run_workflow",
 		description:
-			"Runs a workflow against the current timeline. Each node is a step that takes a timeline and returns one, so a run is a fold over the graph's order.\n\nAll or nothing: nothing is committed until every step has succeeded, so a failure at step five leaves the timeline exactly as it was rather than half-edited. A step that cannot do its work stops the run and says why, rather than passing the timeline through unchanged — a node that silently no-ops would make a run report success having produced nothing.\n\nThe response lists what each step actually did, and the output path when an Export ran. Undoable as one step. Check manage_workflows describe first if you want to know what would stop it before spending the time.",
+			"Runs a workflow against the current timeline. Each node is a step that takes a timeline and returns one, so a run is a fold over the graph's order.\n\nAll or nothing: nothing is committed until every step has succeeded, so a failure at step five leaves the timeline exactly as it was rather than half-edited. A step that cannot do its work stops the run and says why, rather than passing the timeline through unchanged — a node that silently no-ops would make a run report success having produced nothing.\n\nThe response lists what each step actually did. An Export step is started only after the run has been committed, and renders the timeline the run produced; its jobId comes back as exportJobId (poll manage_exports), or exportError if the encode could not start — the edit itself still stands. Undoable as one step. Check manage_workflows describe first if you want to know what would stop it before spending the time.",
 		inputSchema: object(
 			{
 				workflowId: { type: "string", description: "Which workflow to run." },
@@ -2750,16 +2910,30 @@ export const LOOK_TOOLS: AgentTool[] = [
 	{
 		name: "measure_audio",
 		description:
-			"Measure loudness without changing anything. Reports program level in dBFS — the average of the parts that are actually audible, ignoring silence — along with true peak, what fraction of the clip is above the silence floor, and the gain that would bring it to a target. These are the same numbers normalize_audio acts on, so this is how to see what it would do before it does it. Not LUFS: this is an unweighted program average, which tracks LUFS closely for speech but is not the broadcast measurement and should not be reported as one. A suggested gain is capped so the peak stays under −1 dBFS, and says so when the cap is what limited it.",
+			"Measure loudness without changing anything. Per clip: integrated loudness in LUFS (ITU-R BS.1770-4 / EBU R128 — K-weighted, gated at -70 LUFS and -10 LU, over the part of the source the clip plays; cuts of one take are measured together), playingLufs at the clip's current level, true peak in dBTP (a 4x-oversampled estimate), sample peak, the loudest 400 ms moment, how many seconds survived the gates, and the level that would bring it to a target without crossing the true-peak ceiling — the same numbers normalize_audio acts on.\n\nWhen no clipIds are given it also renders and measures the whole mix (mix.integratedLufs, mix.truePeakDbtp, mix.offTargetLu): that is the number YouTube, TikTok, Instagram and Spotify normalise against (-14 LUFS), and podcast apps (-16 LUFS).",
 		inputSchema: object({
 			clipIds: {
 				type: "array",
 				items: { type: "string" },
 				description: "Clips to measure. Omit for every audible clip on the timeline.",
 			},
+			targetLufs: {
+				type: "number",
+				description:
+					"Target integrated loudness in LUFS for the suggested gain. Default -14 (YouTube, TikTok, Instagram, Spotify); -16 for podcasts; -23 for EBU broadcast.",
+			},
 			targetDb: {
 				type: "number",
-				description: "Target program level in dBFS for the suggested gain. Default −16.",
+				description: "Deprecated alias for targetLufs. Read as LUFS.",
+			},
+			ceilingDb: {
+				type: "number",
+				description: "True-peak ceiling in dBTP for the suggested gain. Default -1.",
+			},
+			includeMix: {
+				type: "boolean",
+				description:
+					"Also render and measure the finished mix. Default true when clipIds is omitted, false otherwise.",
 			},
 		}),
 	},
@@ -2776,7 +2950,7 @@ export const MOTION_TOOLS: AgentTool[] = [
 	{
 		name: "add_ken_burns",
 		description:
-			"Add a slow push, pull, or drift across a clip — the move that keeps a still image or a static screen recording from looking frozen. Writes scale and position keyframes across the clip's full length, so it animates in the preview and the export identically. direction sets where it goes: 'in' pushes toward the centre or toward focusX/focusY, 'out' pulls back, and the compass directions pan without zooming. Existing position and scale keyframes on the clip are replaced, because two competing moves on one clip is not a move anyone asked for.",
+			"Add a slow push, pull, or drift across a clip — the move that keeps a still image or a static screen recording from looking frozen. Writes scale and position keyframes across the clip's full length, so it animates in the preview and the export identically. direction sets where it goes: 'in' pushes in on focusX/focusY (default the centre), 'out' pulls back from it, and the compass directions pan without zooming. Sizes are relative to the clip's own box, so a full-frame clip never shows its edge and an inset stays an inset; the keyframes follow set_keyframes' convention (position rows are the top-left corner, scale rows are absolute width/height). Existing position and scale keyframes on the clip are replaced, because two competing moves on one clip is not a move anyone asked for.",
 		inputSchema: object(
 			{
 				clipIds: {
@@ -2797,9 +2971,9 @@ export const MOTION_TOOLS: AgentTool[] = [
 				focusX: {
 					type: "number",
 					description:
-						"Where a push ends up, 0–1 across the frame. Default 0.5. Ignored by the compass directions.",
+						"The point a push zooms toward, 0–1 across the clip's picture: that point holds still while everything around it grows, so the move closes in on it. Default 0.5. Ignored by the compass directions.",
 				},
-				focusY: { type: "number", description: "Same, down the frame. Default 0.5." },
+				focusY: { type: "number", description: "Same, down the picture. Default 0.5." },
 			},
 			["clipIds"],
 		),
@@ -2830,7 +3004,7 @@ export const MOTION_TOOLS: AgentTool[] = [
 	{
 		name: "add_motion_preset",
 		description:
-			"Animate a clip on or off screen — the entrance and exit moves a title needs. 'slide' travels in from an edge, 'pop' scales up from small, 'fade' ramps opacity, 'drift' is a slow continuous move with no settle. Writes keyframes over the first or last durationFrames of the clip and leaves the middle alone, so a title can have an entrance and an exit from two calls. For fades alone, set_clip_properties fadeInFrames is simpler; this is for movement.",
+			"Animate a clip on or off screen — the entrance and exit moves a title needs. 'slide' travels in from an edge, 'pop' scales up from small, 'fade' ramps opacity, 'drift' is a slow continuous move with no settle. Writes keyframes over the first or last durationFrames of the clip and leaves the middle alone, so a title can have an entrance and an exit from two calls. Moves come to rest exactly where the clip is placed, and 'pop' grows to the clip's own size rather than the frame's. For fades alone, set_clip_properties fadeInFrames is simpler; this is for movement.",
 		inputSchema: object(
 			{
 				clipIds: {
@@ -3117,55 +3291,27 @@ export const FINISH_TOOLS: AgentTool[] = [
 	{
 		name: "style_captions",
 		description:
-			"Restyle a whole caption group in one action. Captions are many short clips, so update_text on each is impractical and drifts — one missed clip and a word changes font mid-sentence. Sets font, size, colour, weight, alignment, case, animation, and the active-word highlight across every clip in the group at once. Use get_timeline to see the caption groups; omit groupId to restyle every caption on the timeline.\n\nA preset is the fast way in: 'karaoke' lights each word as it is spoken, 'shorts' is the heavy yellow-highlight look short-form video uses, 'pop' scales each word in on its own beat, 'typewriter' reveals character by character, 'clean' is a quiet fade with no per-word motion, 'emphasis' keeps the line still but colours the word being said, and 'plate' puts the text on a dark rounded scrim so it stays readable over any footage. A preset sets several fields at once; anything you pass alongside it wins, so preset 'shorts' with color '#FFFFFF' gives the shorts layout in white.\n\nPer-word animations need word timings, which narrate_timeline writes and imported SRT files do not always carry. Without them a word-level preset degrades to a whole-line fade rather than failing.",
+			"Restyle a whole caption group in one action. Captions are many short clips, so update_text on each is impractical and drifts — one missed clip and a word changes font mid-sentence. Sets any text-style field (font, weight, size, colour, outline, shadow, plate, wrapping, animation, and the active-word highlight/pop/box) across every clip in the group at once, and can re-cut the group to a number of words per caption. Use get_timeline to see the caption groups; omit groupId to restyle every caption on the timeline.\n\nA preset is the fast way in. Short-form: 'bold_pop' is heavy white capitals with a black outline and the spoken word popping 1.15× in yellow (the Hormozi look); 'highlight_box' puts the spoken word on a coloured rounded box; 'two_tone' fills the line yellow as it is spoken; 'subtle' is clean mixed-case lower captions with a soft shadow. Classic: 'karaoke' lights each word as it is spoken, 'shorts' is heavy outlined yellow-highlight capitals, 'pop' scales the line in, 'typewriter' reveals character by character, 'clean' is a quiet fade, 'emphasis' reveals word by word, and 'plate' puts the text on a dark rounded scrim. A preset is a whole look — it clears outline, shadow, pop and plate fields it doesn't set — and anything you pass alongside it wins, so preset 'bold_pop' with highlightColor '#22C55E' gives the same look in green. Pair short-form presets with wordsPerCaption 2–3.\n\nPer-word animations need word timings, which add_captions and narrate_timeline write and imported SRT files do not always carry. Without them a word-level preset degrades to a whole-line fade rather than failing.",
 		inputSchema: object({
 			groupId: {
 				type: "string",
 				description: "Caption group to restyle. Omit for every caption group.",
 			},
-			fontFamily: { type: "string", description: "Font name." },
-			fontSize: { type: "integer", description: "Point size, 12–300." },
-			color: { type: "string", description: "Hex colour, e.g. '#FFEE00'." },
-			bold: { type: "boolean" },
-			italic: { type: "boolean" },
-			uppercase: { type: "boolean" },
-			alignment: { type: "string", enum: ["left", "center", "right"] },
 			preset: {
 				type: "string",
-				enum: ["karaoke", "shorts", "pop", "typewriter", "clean", "emphasis"],
+				enum: [...CAPTION_PRESET_NAMES],
 				description:
 					"A whole look in one word. Applied first, so any explicit field you pass overrides it.",
 			},
-			animation: {
-				type: "string",
-				enum: ["off", "fade", "slide_up", "pop", "typewriter", "word_by_word", "karaoke"],
+			wordsPerCaption: {
+				type: "integer",
+				minimum: 1,
+				maximum: 20,
 				description:
-					"How the line arrives. 'karaoke' and 'word_by_word' are per-word and need word timings; the rest animate the whole line.",
+					"Re-cut the group so at most this many words show at once (1–3 for Shorts/Reels/TikTok). Works from the captions' own word timing; never joins words across a pause. Caption clip ids change.",
 			},
-			highlightColor: {
-				type: "string",
-				description:
-					"Hex colour for the word currently being spoken, used by karaoke and word_by_word. This is what makes a caption readable as speech rather than as a block of text.",
-			},
-			backgroundColor: {
-				type: "string",
-				description:
-					"Hex colour for a filled plate behind the text, e.g. '#000000'. This is the only thing that makes a caption reliably readable over footage whose brightness you do not control — white text disappears on a docs site and dark text disappears on a dark app, and a plate stops it mattering. Pass 'none' to remove it.",
-			},
-			backgroundOpacity: {
-				type: "number",
-				description:
-					"0–1. Default 1. Around 0.6–0.75 reads as a scrim: the picture still shows through, and the text still holds.",
-			},
-			backgroundPadding: {
-				type: "number",
-				description: "Space around the text, as a fraction of the font size. Default 0.35.",
-			},
-			backgroundRadius: {
-				type: "number",
-				description:
-					"Corner rounding, as a fraction of the plate's height. Default 0.25; 0 is a hard rectangle and 0.5 is a full pill.",
-			},
+			...textStyleProperties(),
+			style: TEXT_STYLE_SCHEMA,
 		}),
 	},
 	{
@@ -3207,7 +3353,7 @@ export const FINISH_TOOLS: AgentTool[] = [
 	{
 		name: "batch_export",
 		description:
-			"Build several delivery variants of the same cut in one call — the actual short-form case, where one edit becomes a 9:16 vertical, a 1:1 square, and a 16:9 landscape. Each variant may set its own aspect and its own maximum length.\n\nEach variant becomes its own timeline, sized to that aspect, with every picture clip scaled to cover the new frame rather than letterboxed into it, and cut to length if maxSeconds is set. It does not write files: export_project with the returned timelineId writes each one, and set_active_timeline opens one to check before committing an encode to it.\n\nEvery variant is derived from this cut as it is now, never from the previous variant. That is the whole reason to use this rather than reframing in a loop: running reframe and trim in sequence without restoring compounds them, so the third variant would be reframed three times and cut to a third of the length. A length limit is a hard cut, not a retime, because retiming would change how the narration sounds.",
+			"Build several delivery variants of the same cut in one call — the actual short-form case, where one edit becomes a 9:16 vertical, a 1:1 square, and a 16:9 landscape. Each variant may set its own aspect and its own maximum length.\n\nEach variant becomes its own timeline, sized to that aspect at the cut's short edge and framed exactly as reframe_timeline would frame it — footage that filled the frame is centred and scaled to cover the new one rather than letterboxed into it, insets keep their size — and cut to length if maxSeconds is set. It does not write files: export_project with the returned timelineId writes each one, and set_active_timeline opens one to check before committing an encode to it.\n\nEvery variant is derived from this cut as it is now, never from the previous variant. That is the whole reason to use this rather than reframing in a loop: running reframe and trim in sequence without restoring compounds them, so the third variant would be reframed three times and cut to a third of the length. A length limit is a hard cut, not a retime, because retiming would change how the narration sounds.",
 		inputSchema: object(
 			{
 				variants: {
@@ -3395,6 +3541,7 @@ export const MCP_TOOLS: AgentTool[] = [
 	...AUDIO_TOOLS,
 	...FINISH_TOOLS,
 	...HEADLESS_TOOLS,
+	...CREATOR_TOOLS,
 ];
 
 export const TOOLS_BY_NAME = new Map(MCP_TOOLS.map((tool) => [tool.name, tool]));

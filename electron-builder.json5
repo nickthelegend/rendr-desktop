@@ -36,6 +36,16 @@
     {
       "from": "public/wallpapers",
       "to": "assets/wallpapers"
+    },
+    // Rendr Connect: the stdio MCP bridge and the `rendr` CLI, run with
+    // ELECTRON_RUN_AS_NODE so they need no separate Node install.
+    {
+      "from": "mcpb/server/index.cjs",
+      "to": "connect/mcp-bridge.cjs"
+    },
+    {
+      "from": "bin/rendr.mjs",
+      "to": "connect/rendr.mjs"
     }
   ],
   "publish": [

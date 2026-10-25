@@ -5,13 +5,19 @@ import { MCP_PATH, MCP_PORT, McpHttpServer, type ToolCallResult } from "./httpSe
 import { TOOLS_BY_NAME } from "./toolDefinitions";
 
 let server: McpHttpServer | null = null;
+/** Other listeners serving the same tools — remote access, for one. */
+const attached = new Set<McpHttpServer>();
 
 /**
  * Every tool is forwarded to the renderer, which owns project state, the timeline,
  * and the recording state machine. Unknown names are rejected here so a typo never
- * reaches the editor.
+ * reaches the editor. Local MCP, remote access, REST and the in-app API agent all
+ * call through this one function.
  */
-async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
+export async function dispatchTool(
+	name: string,
+	args: Record<string, unknown>,
+): Promise<ToolCallResult> {
 	if (!TOOLS_BY_NAME.has(name)) {
 		throw new Error(`Unknown tool: ${name}`);
 	}
@@ -21,7 +27,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
 export async function startMcpServer(windows: AgentWindows): Promise<void> {
 	if (server) return;
 	initAgentBridge(windows);
-	const instance = new McpHttpServer(dispatch);
+	const instance = new McpHttpServer(dispatchTool);
 	try {
 		await instance.start();
 		server = instance;
@@ -39,9 +45,19 @@ export async function stopMcpServer(): Promise<void> {
 	await instance?.stop();
 }
 
+/** Registers another listener so tool-list changes reach its clients too. */
+export function attachMcpServer(instance: McpHttpServer): void {
+	attached.add(instance);
+}
+
+export function detachMcpServer(instance: McpHttpServer): void {
+	attached.delete(instance);
+}
+
 /** Call when the tool inventory changes (e.g. a recording starts and edits become unavailable). */
 export function notifyToolListChanged(): void {
 	server?.notifyToolListChanged();
+	for (const instance of attached) instance.notifyToolListChanged();
 }
 
 export { MCP_PATH, MCP_PORT };

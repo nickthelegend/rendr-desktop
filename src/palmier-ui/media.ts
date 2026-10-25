@@ -2,6 +2,8 @@
 // recording; each one is probed for its actual duration and dimensions before
 // it enters the library, so the timeline never places a clip of guessed length.
 
+import type { FaceTrack } from "./vision";
+
 export type MediaKind = "video" | "audio" | "image";
 
 export interface AssetModel {
@@ -12,6 +14,12 @@ export interface AssetModel {
 	durationSeconds: number;
 	width: number;
 	height: number;
+	/**
+	 * Average frame rate read from the container, when it could be. A project
+	 * started from this footage takes its rate, so a 60 fps phone clip isn't
+	 * quietly cut at 30.
+	 */
+	fps?: number;
 	hasAudio: boolean;
 	/** Object URL for the decoded source. Revoked when the asset is dropped. */
 	url: string;
@@ -29,6 +37,25 @@ export interface AssetModel {
 	webcamAssetId?: string;
 	/** True for that camera take, so the library can label and group it. */
 	isWebcam?: boolean;
+	/**
+	 * The person matte made from this footage (see vision.ts): a hidden greyscale
+	 * video the compositor uses as the footage's alpha when a clip asks for its
+	 * background to be removed or replaced.
+	 */
+	matteAssetId?: string;
+	/** True for such a matte, so the library hides it — it is a tool, not media. */
+	isMatte?: boolean;
+	/**
+	 * Where the file lives on disk, when it came from one (a drop, the file
+	 * picker, an import by path). Lets the main process read it in place
+	 * instead of copying gigabytes through IPC, and lets a reopened project
+	 * relink itself.
+	 */
+	sourcePath?: string;
+	/** Where the speaker's face is through the footage, for reframing and punch-ins. */
+	faceTrack?: FaceTrack;
+	/** Share of the footage with a person in shot, from the same analysis. */
+	personCoverage?: number;
 	/**
 	 * Restored from a project file with no source behind it. Projects reference
 	 * media rather than embedding it, so an opened project needs relinking.
@@ -147,6 +174,30 @@ function probeVideo(
 	});
 }
 
+/**
+ * The footage's average frame rate, from its container.
+ *
+ * A <video> element has no way to say this, so the file is demuxed for it —
+ * only far enough to average the first second or two of packets, which is
+ * what a variable-rate phone file needs to read as "30" rather than whatever
+ * its first gap happens to be. Best effort: a container mediabunny can't read
+ * simply has no rate, and the project keeps its own.
+ */
+async function probeFrameRate(file: File): Promise<number | undefined> {
+	try {
+		const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
+		const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+		const track = await input.getPrimaryVideoTrack();
+		if (!track) return undefined;
+		const stats = await track.computePacketStats(90);
+		return Number.isFinite(stats.averagePacketRate) && stats.averagePacketRate > 0
+			? stats.averagePacketRate
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function probeAudio(url: string): Promise<{ duration: number }> {
 	return new Promise((resolve, reject) => {
 		const element = document.createElement("audio");
@@ -178,11 +229,23 @@ export interface ImportOutcome {
  * Import files into the library. Unsupported or undecodable files are reported
  * rather than silently dropped, and never leave a half-built asset behind.
  */
+/** A File that remembers the path it was read from, for imports by path. */
+export type PathedFile = File & { rendrSourcePath?: string };
+
+/** The file's path on disk: one Rendr was given, or the one the OS dropped. */
+export function sourcePathOf(file: File): string | undefined {
+	const given = (file as PathedFile).rendrSourcePath;
+	if (given) return given;
+	const fromOs = typeof window === "undefined" ? null : window.electronAPI?.pathForFile?.(file);
+	return fromOs || undefined;
+}
+
 export async function importFiles(files: readonly File[]): Promise<ImportOutcome> {
 	const assets: AssetModel[] = [];
 	const rejected: string[] = [];
 
 	for (const file of files) {
+		const sourcePath = sourcePathOf(file);
 		const type = kindOf(file);
 		if (!type) {
 			rejected.push(`${file.name} — unsupported format`);
@@ -193,6 +256,7 @@ export async function importFiles(files: readonly File[]): Promise<ImportOutcome
 		try {
 			if (type === "video") {
 				const probe = await probeVideo(url);
+				const fps = await probeFrameRate(file);
 				assets.push({
 					id: nextId(),
 					name: file.name,
@@ -200,8 +264,10 @@ export async function importFiles(files: readonly File[]): Promise<ImportOutcome
 					durationSeconds: probe.duration,
 					width: probe.width,
 					height: probe.height,
+					...(fps ? { fps } : {}),
 					hasAudio: probe.hasAudio,
 					url,
+					...(sourcePath ? { sourcePath } : {}),
 				});
 			} else if (type === "audio") {
 				const probe = await probeAudio(url);
@@ -214,6 +280,7 @@ export async function importFiles(files: readonly File[]): Promise<ImportOutcome
 					height: 0,
 					hasAudio: true,
 					url,
+					...(sourcePath ? { sourcePath } : {}),
 				});
 			} else {
 				const probe = await probeImage(url);
@@ -226,6 +293,7 @@ export async function importFiles(files: readonly File[]): Promise<ImportOutcome
 					height: probe.height,
 					hasAudio: false,
 					url,
+					...(sourcePath ? { sourcePath } : {}),
 				});
 			}
 		} catch (error) {

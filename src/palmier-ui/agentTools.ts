@@ -14,9 +14,7 @@ import {
 	detectBeats,
 	detectSilence,
 	findSyncOffset,
-	measureLoudness,
 	measureNoiseFloor,
-	normalizationGainDb,
 	suggestedDenoiseStrength,
 } from "./analysis";
 import { decodeAudio, monoSamples } from "./audio";
@@ -35,6 +33,7 @@ import {
 	isFiller,
 	parseSubtitles,
 	placeCaptions,
+	rechunkCaptionGroup,
 	removeCaptionGroup,
 	toSrt,
 	toVtt,
@@ -46,6 +45,7 @@ import { CURSOR_LIMITS, CURSOR_STYLES, type CursorSettings, DEFAULT_CURSOR } fro
 import { type ColorBalance, parseCurve, type ToneCurves } from "./curves";
 import { type AppliedEffect, EFFECTS, effectCatalog, normalizeEffect } from "./effects";
 import { DEFAULT_EXPORT_SETTINGS, type ExportSettings, exportDimensions } from "./export";
+import { resolveExportPreset } from "./exportPresets";
 import {
 	canvasToBase64Png,
 	canvasToPngBlob,
@@ -56,10 +56,12 @@ import {
 import { toFcpxml, toXmeml } from "./interchange";
 import {
 	animatedProperties,
+	boxSizeAt,
 	isKeyframeProperty,
 	KEYFRAME_ARITY,
 	keyframeRows,
 	parseKeyframeRows,
+	positionRow,
 } from "./keyframes";
 import {
 	ANCHORS,
@@ -71,8 +73,17 @@ import {
 	slotsFor,
 } from "./layout";
 import { findLook, freshLookId, type LookModel, sortLooks } from "./looks";
-import { folderChain, formatDuration, SUPPORTED_SUMMARY } from "./media";
-import { buildDuckPlan, encodeWavBytes, renderTimelineAudio } from "./mixdown";
+import { type LoudnessMeasurement, loudnessGain, measureIntegratedLoudness } from "./loudness";
+import { folderChain, formatDuration, type PathedFile, SUPPORTED_SUMMARY } from "./media";
+import {
+	buildDuckPlan,
+	clipSourceWindow,
+	type DuckSpan,
+	encodeWavBytes,
+	renderTimelineAudio,
+	sourceSpansToTimeline,
+	splitVoiceAndBeds,
+} from "./mixdown";
 import {
 	CLIP_LIMITS,
 	type ClipModel,
@@ -136,6 +147,7 @@ import {
 	worthCorrecting,
 } from "./scopes";
 import { type CaptureSource, clipSourceMsToFrame, type EditorApi, formatTimecode } from "./state";
+import { ignoredStyleReceipt, parseTextStyle, type TextStylePatch } from "./textStyle";
 import {
 	DEFAULT_VOICE,
 	getVoiceStatus,
@@ -144,6 +156,7 @@ import {
 	planNarration,
 	voiceSupported,
 } from "./voice";
+import { detectSpeech } from "./voiceActivity";
 import {
 	DEFAULT_WEBCAM,
 	WEBCAM_LIMITS,
@@ -172,7 +185,7 @@ import {
 	type WorkflowModel,
 	workflowIssues,
 } from "./workflow";
-import { ASPECTS, followKeyframes, reframeClips, runWorkflow } from "./workflowRun";
+import { ASPECTS, followKeyframes, reframeTimeline, runWorkflow } from "./workflowRun";
 import { cursorFocusAt, DEFAULT_ZOOM_TIMING, scaleForDepth, ZOOM_TIMING_LIMITS } from "./zoom";
 
 export interface ToolResult {
@@ -189,9 +202,12 @@ function ok(payload: unknown): ToolResult {
 	return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
-function fail(code: string, message: string): ToolResult {
+/** `detail` carries machine-readable context, such as the call that would fix it. */
+function fail(code: string, message: string, detail?: Record<string, unknown>): ToolResult {
 	return {
-		content: [{ type: "text", text: JSON.stringify({ error: code, message }, null, 2) }],
+		content: [
+			{ type: "text", text: JSON.stringify({ error: code, message, ...detail }, null, 2) },
+		],
 		isError: true,
 	};
 }
@@ -360,30 +376,152 @@ const neutralGrade = (): ClipModel["color"] => ({
  * an imported SRT may not have them, and the renderer falls back to animating
  * the whole line rather than showing nothing.
  */
-const CAPTION_PRESETS: Record<string, Record<string, unknown>> = {
+const CAPTION_LOOK_RESET: TextStylePatch = {
+	// Every field a preset may set, cleared, so a preset is a whole look: going
+	// from 'bold_pop' to 'subtle' must drop the outline and the pop, not leave
+	// them on underneath a look that never asked for them.
+	fontWeight: undefined,
+	uppercase: false,
+	tracking: 0,
+	strokeColor: undefined,
+	strokeWidth: undefined,
+	shadowColor: undefined,
+	shadowBlur: undefined,
+	shadowOffsetX: undefined,
+	shadowOffsetY: undefined,
+	activeWordScale: undefined,
+	activeWordBackground: undefined,
+	spokenColor: undefined,
+	upcomingOpacity: undefined,
+	backgroundColor: undefined,
+	backgroundOpacity: undefined,
+	backgroundPadding: undefined,
+	backgroundRadius: undefined,
+};
+
+/**
+ * Preset sizes are authored for a 1080 short edge. Text sizes are canvas
+ * points, so on a smaller canvas (a 720p project, a 360p draft) the same
+ * numbers would fill the frame — the preset's look is kept by scaling its
+ * point sizes to the timeline's short edge.
+ */
+export function scalePresetToCanvas(
+	preset: TextStylePatch,
+	timeline: { width: number; height: number },
+): TextStylePatch {
+	const factor = Math.min(timeline.width, timeline.height) / 1080;
+	if (Math.abs(factor - 1) < 0.01) return preset;
+	const scaled: Record<string, unknown> = { ...preset };
+	for (const key of ["fontSize", "strokeWidth", "shadowBlur", "shadowOffsetX", "shadowOffsetY"]) {
+		const value = scaled[key];
+		if (typeof value === "number") scaled[key] = Math.round(value * factor * 10) / 10;
+	}
+	return scaled as TextStylePatch;
+}
+
+const CAPTION_PRESETS: Record<string, TextStylePatch> = {
 	// Each word lights as it is said. The default, because it is the one that
 	// makes a caption readable as speech rather than as a wall of text.
-	karaoke: { animation: "karaoke", highlightColor: "#FFE14D", bold: true },
+	karaoke: { ...CAPTION_LOOK_RESET, animation: "karaoke", highlightColor: "#FFE14D", bold: true },
 	// The short-form look: heavy, tight, one word hot at a time.
 	shorts: {
+		...CAPTION_LOOK_RESET,
 		animation: "karaoke",
 		highlightColor: "#FFE14D",
 		bold: true,
 		uppercase: true,
 		fontSize: 64,
 		tracking: 2,
+		strokeColor: "#000000",
+		strokeWidth: 4,
+	},
+	// The Hormozi look: heavy white capitals with a black outline, every word
+	// at full strength, and the spoken one popping in yellow. The outline and
+	// shadow are what let it sit on any footage without a plate.
+	bold_pop: {
+		...CAPTION_LOOK_RESET,
+		animation: "karaoke",
+		color: "#FFFFFF",
+		highlightColor: "#FFE14D",
+		bold: true,
+		fontWeight: 900,
+		uppercase: true,
+		fontSize: 88,
+		tracking: 1,
+		strokeColor: "#000000",
+		strokeWidth: 7,
+		shadowColor: "#000000A6",
+		shadowBlur: 10,
+		shadowOffsetY: 4,
+		activeWordScale: 1.15,
+		upcomingOpacity: 1,
+	},
+	// The spoken word sits on a coloured rounded box. Reads at a glance even
+	// with the sound off, which is how most short-form video is first watched.
+	highlight_box: {
+		...CAPTION_LOOK_RESET,
+		animation: "karaoke",
+		color: "#FFFFFF",
+		highlightColor: "#FFFFFF",
+		bold: true,
+		fontWeight: 900,
+		uppercase: true,
+		fontSize: 84,
+		strokeColor: "#000000",
+		strokeWidth: 4,
+		activeWordBackground: "#7C3AED",
+		activeWordScale: 1.06,
+		upcomingOpacity: 1,
+	},
+	// Clean and low-key, for talking heads and explainers: mixed case, a
+	// readable weight, a soft shadow, and the line brightening as it is said.
+	subtle: {
+		...CAPTION_LOOK_RESET,
+		animation: "karaoke",
+		color: "#FFFFFF",
+		highlightColor: "#FFFFFF",
+		bold: true,
+		fontWeight: 600,
+		fontSize: 52,
+		shadowColor: "#00000099",
+		shadowBlur: 12,
+		shadowOffsetY: 2,
+		upcomingOpacity: 0.6,
+	},
+	// The line fills in a second colour as it is spoken and stays filled, so
+	// the eye can see how far through the sentence the speaker is.
+	two_tone: {
+		...CAPTION_LOOK_RESET,
+		animation: "karaoke",
+		color: "#FFFFFF",
+		highlightColor: "#FFE14D",
+		spokenColor: "#FFE14D",
+		bold: true,
+		fontWeight: 900,
+		uppercase: true,
+		fontSize: 84,
+		strokeColor: "#000000",
+		strokeWidth: 6,
+		activeWordScale: 1.08,
+		upcomingOpacity: 1,
 	},
 	// Words scale in on their own beat. Livelier than karaoke, busier too.
-	pop: { animation: "pop", bold: true, highlightColor: "#FFFFFF" },
-	typewriter: { animation: "typewriter", bold: false },
+	pop: { ...CAPTION_LOOK_RESET, animation: "pop", bold: true, highlightColor: "#FFFFFF" },
+	typewriter: { ...CAPTION_LOOK_RESET, animation: "typewriter", bold: false },
 	// Quiet: the line fades in whole and stays out of the way.
-	clean: { animation: "fade", bold: false, uppercase: false, highlightColor: "#FFFFFF" },
+	clean: { ...CAPTION_LOOK_RESET, animation: "fade", bold: false, highlightColor: "#FFFFFF" },
 	// The line sits still and only the colour moves, which reads calmer than
 	// karaoke on dense footage where motion competes with the picture.
-	emphasis: { animation: "word_by_word", highlightColor: "#7CD4FD", bold: true },
+	emphasis: {
+		...CAPTION_LOOK_RESET,
+		animation: "word_by_word",
+		highlightColor: "#7CD4FD",
+		bold: true,
+	},
 	// The safe one. A scrim behind the text means the caption does not depend
 	// on the footage being a brightness that suits it.
 	plate: {
+		...CAPTION_LOOK_RESET,
 		animation: "karaoke",
 		highlightColor: "#FFE14D",
 		color: "#FFFFFF",
@@ -421,8 +559,11 @@ const TITLE_PRESETS: Record<
 	lowerThird: {
 		main: { fontSize: 52, bold: true, alignment: "left" },
 		sub: { fontSize: 32, bold: false, alignment: "left" },
-		place: { centerX: 0.28, centerY: 0.78 },
-		subPlace: { centerX: 0.28, centerY: 0.86 },
+		// A box of its own width, not the full-frame default: left-aligned text
+		// starts at the box's left edge, and a full-width box centred at 0.28
+		// puts that edge a fifth of the frame off the left side.
+		place: { centerX: 0.28, centerY: 0.78, width: 0.48, height: 0.1 },
+		subPlace: { centerX: 0.28, centerY: 0.86, width: 0.48, height: 0.08 },
 	},
 	endCard: {
 		main: { fontSize: 84, bold: true, alignment: "center" },
@@ -482,8 +623,51 @@ function sceneDistance(gap: ReturnType<typeof compareScopes>): number {
 	);
 }
 
-/** Everything TextStyle.animation accepts, for validating an agent's string. */
-const TEXT_ANIMATIONS = ["off", "fade", "slide_up", "pop", "typewriter", "word_by_word", "karaoke"];
+/**
+ * The text-box fields of a transform an agent passed, and the keys it could
+ * not use. Flips and anything else stay out: a text box has no business being
+ * mirrored by a typo.
+ */
+function parseTextTransform(input: unknown): {
+	patch: Partial<Record<"centerX" | "centerY" | "width" | "height" | "rotation", number>>;
+	ignored: string[];
+} {
+	const patch: Partial<Record<"centerX" | "centerY" | "width" | "height" | "rotation", number>> =
+		{};
+	const ignored: string[] = [];
+	if (!input || typeof input !== "object" || Array.isArray(input)) return { patch, ignored };
+	for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+		if (
+			(key === "centerX" ||
+				key === "centerY" ||
+				key === "width" ||
+				key === "height" ||
+				key === "rotation") &&
+			typeof value === "number" &&
+			Number.isFinite(value)
+		) {
+			patch[key] = value;
+		} else {
+			ignored.push(`transform.${key}`);
+		}
+	}
+	return { patch, ignored };
+}
+
+/**
+ * An agent's style argument, with the top-level `animation` and
+ * `highlightColor` folded in — the tools accept them at either level and mean
+ * the same thing — parsed through the one style parser.
+ */
+function textStyleArgs(args: Record<string, unknown>) {
+	const raw = args.style;
+	if (raw !== undefined && raw !== null && (typeof raw !== "object" || Array.isArray(raw)))
+		return { patch: {}, ignored: [], errors: ["style must be an object."] };
+	const input: Record<string, unknown> = raw ? { ...(raw as Record<string, unknown>) } : {};
+	if (args.animation !== undefined) input.animation = args.animation;
+	if (args.highlightColor !== undefined) input.highlightColor = args.highlightColor;
+	return parseTextStyle(input);
+}
 
 /** `clipIds`-style arguments, filtered to the strings that are actually there. */
 const stringList = (value: unknown): string[] =>
@@ -579,6 +763,81 @@ export function createAgentTools(api: EditorApi) {
 		// edit landing in the same tick isn't clobbered by a stale snapshot.
 		commit(label, (current) => (current === timeline ? next : reduce(current)));
 		return ok(receipt(next));
+	};
+
+	/**
+	 * BS.1770 loudness of the audio these clips play, one measurement per source.
+	 *
+	 * A talking-head edit is one long take cut into dozens of pieces. Measuring
+	 * each piece alone would give each its own gain, and a few tenths of a dB of
+	 * difference between neighbouring jump cuts is an audible step — so every
+	 * clip of one source is measured together, over just the stretches the
+	 * timeline plays, and they share the answer.
+	 */
+	const measureSourceLoudness = async (
+		clips: readonly ClipModel[],
+	): Promise<
+		Map<string, { measurement: LoudnessMeasurement; clipCount: number } | { reason: string }>
+	> => {
+		const groups = new Map<string, ClipModel[]>();
+		for (const clip of clips) {
+			const key = clip.assetId ?? "";
+			groups.set(key, [...(groups.get(key) ?? []), clip]);
+		}
+		const out = new Map<
+			string,
+			{ measurement: LoudnessMeasurement; clipCount: number } | { reason: string }
+		>();
+		for (const [assetId, group] of groups) {
+			const asset = state.assets.find((entry) => entry.id === assetId);
+			const decoded = asset && !asset.offline ? await decodeAudio(asset) : null;
+			if (!decoded) {
+				const reason = !asset
+					? "This clip has no asset."
+					: asset.offline
+						? "Media is offline — relink the file to measure it."
+						: "No decodable audio stream.";
+				for (const clip of group) out.set(clip.id, { reason });
+				continue;
+			}
+			const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) =>
+				decoded.getChannelData(index),
+			);
+			const ranges = group.map((clip): [number, number] => {
+				const [from, to] = clipSourceWindow(clip, timeline.fps);
+				return [Math.round(from * decoded.sampleRate), Math.round(to * decoded.sampleRate)];
+			});
+			const measurement = measureIntegratedLoudness(channels, decoded.sampleRate, ranges);
+			for (const clip of group) out.set(clip.id, { measurement, clipCount: group.length });
+		}
+		return out;
+	};
+
+	/**
+	 * Sets a clip's level and moves its volume keyframes by the same amount.
+	 *
+	 * Volume keyframes hold absolute levels and override volumeDb while they
+	 * exist, so changing the level alone would be silently ignored on a ducked
+	 * clip. Shifting them keeps the duck's shape at the new level.
+	 */
+	const setLevelKeepingAutomation = (
+		t: TimelineModel,
+		clip: ClipModel,
+		volumeDb: number,
+	): TimelineModel => {
+		const delta = volumeDb - clip.volumeDb;
+		const leveled = setClipNumber(t, [clip.id], "volumeDb", volumeDb);
+		const automation = clip.keyframes?.volumeDb;
+		if (!automation?.length || delta === 0) return leveled;
+		return setClipKeyframes(
+			leveled,
+			clip.id,
+			"volumeDb",
+			automation.map((keyframe) => ({
+				...keyframe,
+				values: [clampTo("volumeDb", (keyframe.values[0] ?? 0) + delta)],
+			})),
+		);
 	};
 
 	/**
@@ -713,9 +972,11 @@ export function createAgentTools(api: EditorApi) {
 			);
 			// `folder` includes subfolders, as the contract says.
 			const folder = asString(args.folder);
+			// Person mattes are the compositor's, not media to place; asking for
+			// one by id still finds it.
 			let assets = ids.length
 				? state.assets.filter((asset) => ids.includes(asset.id))
-				: state.assets;
+				: state.assets.filter((asset) => !asset.isMatte);
 			if (folder) {
 				assets = assets.filter(
 					(asset) => asset.folder === folder || asset.folder?.startsWith(`${folder}/`),
@@ -732,6 +993,12 @@ export function createAgentTools(api: EditorApi) {
 					hasAudio: asset.hasAudio,
 					...(asset.folder ? { folder: asset.folder } : {}),
 					...(asset.hasCursorTelemetry ? { hasCursorTelemetry: true } : {}),
+					// What footage analysis knows, so an agent can skip re-running it.
+					...(asset.matteAssetId ? { hasMatte: true } : {}),
+					...(asset.faceTrack ? { hasFaceTrack: true } : {}),
+					...(asset.personCoverage !== undefined
+						? { personCoverage: Math.round(asset.personCoverage * 100) / 100 }
+						: {}),
 					// Which takes have a camera to composite, and which assets
 					// are that camera rather than something to edit.
 					...(asset.webcamAssetId ? { webcamAssetId: asset.webcamAssetId } : {}),
@@ -1105,33 +1372,167 @@ export function createAgentTools(api: EditorApi) {
 			const entries = asArray(args.entries);
 			if (entries.length === 0)
 				return fail("invalid_argument", "entries must be a non-empty array.");
-			const ids: string[] = [];
+			const placed = entries.filter(
+				(raw) =>
+					raw &&
+					typeof raw === "object" &&
+					(raw as Record<string, unknown>).trackIndex !== undefined,
+			).length;
+			// Half the entries on named tracks and half wherever is free has no
+			// one right reading, so it is refused rather than guessed at.
+			if (placed > 0 && placed < entries.length)
+				return fail(
+					"invalid_argument",
+					"Set trackIndex on every entry, or on none of them to stack the text on new top tracks.",
+				);
+
+			const stamp = Date.now();
+			const ignored: string[] = [];
+			const prepared: Array<{
+				id: string;
+				content: string;
+				startFrame: number;
+				endFrame: number;
+				trackIndex: number | null;
+				style: TextStylePatch;
+				transform: ReturnType<typeof parseTextTransform>["patch"];
+			}> = [];
+			for (const [index, raw] of entries.entries()) {
+				if (!raw || typeof raw !== "object" || Array.isArray(raw))
+					return fail("invalid_argument", `entries[${index}] must be an object.`);
+				const entry = raw as Record<string, unknown>;
+				if (asString(entry.fillMode) === "footage")
+					return fail(
+						"not_supported",
+						"Rendr draws text in one colour; it can't stencil the layers below through the letters. Set style.color instead.",
+					);
+				const style = textStyleArgs(entry);
+				if (style.errors.length > 0)
+					return fail("invalid_argument", `entries[${index}]: ${style.errors.join(" ")}`);
+				const transform = parseTextTransform(entry.transform);
+				ignored.push(
+					...style.ignored.map((key) => `entries[${index}].style.${key}`),
+					...transform.ignored.map((key) => `entries[${index}].${key}`),
+				);
+				const startFrame = Math.max(0, Math.round(asNumber(entry.startFrame) ?? 0));
+				const endFrame = Math.round(
+					asNumber(entry.endFrame) ?? startFrame + timeline.fps * 3,
+				);
+				const trackIndex = asNumber(entry.trackIndex);
+				if (trackIndex !== null) {
+					const track = timeline.tracks[Math.round(trackIndex)];
+					if (!track) return fail("unknown_track", `No track at index ${trackIndex}.`);
+					if (track.kind !== "video")
+						return fail(
+							"invalid_argument",
+							`Track ${trackIndex} ('${track.name}') is an audio track; text needs a video track.`,
+						);
+				}
+				prepared.push({
+					id: `text-agent-${stamp}-${index}`,
+					content: asString(entry.content) ?? "Text",
+					startFrame,
+					endFrame: Math.max(startFrame + 2, endFrame),
+					trackIndex: trackIndex === null ? null : Math.round(trackIndex),
+					style: style.patch,
+					transform: transform.patch,
+				});
+			}
+
+			// A named track must have room: dropping a title onto footage would
+			// either overwrite the shot or silently land somewhere else.
+			const overlaps = (a: { startFrame: number; endFrame: number }, b: typeof a) =>
+				a.startFrame < b.endFrame && b.startFrame < a.endFrame;
+			for (const [index, entry] of prepared.entries()) {
+				if (entry.trackIndex === null) continue;
+				const track = timeline.tracks[entry.trackIndex];
+				const clash =
+					track.clips.find((clip) => overlaps(clip, entry)) ??
+					prepared
+						.slice(0, index)
+						.find(
+							(other) =>
+								other.trackIndex === entry.trackIndex && overlaps(other, entry),
+						);
+				if (clash)
+					return fail(
+						"overlap",
+						`entries[${index}] [${entry.startFrame}, ${entry.endFrame}) overlaps '${"name" in clash ? clash.name : clash.content}' on track ${entry.trackIndex}. Pick a free span or omit trackIndex on every entry.`,
+					);
+			}
+
 			return mutate(
 				"Add text",
 				(t) => {
-					let next = t;
-					entries.forEach((raw, index) => {
-						const entry = raw as Record<string, unknown>;
-						const content = asString(entry.content) ?? "Text";
-						const startFrame = asNumber(entry.startFrame) ?? 0;
-						const endFrame = asNumber(entry.endFrame) ?? startFrame + next.fps * 3;
-						const id = `text-agent-${Date.now()}-${index}`;
-						ids.push(id);
-						next = addTextClip(
-							next,
-							startFrame,
-							Math.max(2, Math.round(endFrame - startFrame)),
-							id,
-							content,
-						).timeline;
-					});
+					const made = prepared.map((entry) =>
+						withDefaults({
+							id: entry.id,
+							name: entry.content,
+							mediaType: "text",
+							startFrame: entry.startFrame,
+							endFrame: entry.endFrame,
+							content: entry.content,
+						}),
+					);
+					let next: TimelineModel;
+					if (placed > 0) {
+						next = {
+							...t,
+							tracks: t.tracks.map((track, index) => {
+								const mine = made.filter(
+									(_, entryIndex) => prepared[entryIndex].trackIndex === index,
+								);
+								return mine.length === 0
+									? track
+									: {
+											...track,
+											clips: [...track.clips, ...mine].sort(
+												(a, b) => a.startFrame - b.startFrame,
+											),
+										};
+							}),
+						};
+					} else {
+						// One new top track, and another above it only where two
+						// entries overlap — so text is always above the picture,
+						// never dropped into a free gap on a track under the footage.
+						const lanes: ClipModel[][] = [];
+						for (const clip of made) {
+							const lane = lanes.find((existing) =>
+								existing.every((other) => !overlaps(other, clip)),
+							);
+							if (lane) lane.push(clip);
+							else lanes.push([clip]);
+						}
+						next = {
+							...t,
+							tracks: [
+								...lanes.reverse().map((clips, index) => ({
+									id: `trk-text-${clips[0].id}`,
+									name: `T${lanes.length - index}`,
+									kind: "video" as const,
+									muted: false,
+									hidden: false,
+									clips: clips.sort((a, b) => a.startFrame - b.startFrame),
+								})),
+								...t.tracks,
+							],
+						};
+					}
+					for (const entry of prepared) {
+						if (Object.keys(entry.style).length > 0)
+							next = setClipTextStyle(next, [entry.id], entry.style);
+						if (Object.keys(entry.transform).length > 0)
+							next = setClipTransform(next, [entry.id], entry.transform);
+					}
 					return next;
 				},
 				(next) => ({
-					clips: ids.map((id) => {
+					clips: prepared.map(({ id }) => {
 						const clip = findClip(next, id);
 						return clip ? describeClip(clip, next.fps) : { id, missing: true };
 					}),
+					...ignoredStyleReceipt(ignored),
 				}),
 			);
 		},
@@ -1162,24 +1563,22 @@ export function createAgentTools(api: EditorApi) {
 			}
 
 			const content = asString(args.content);
-			const style = { ...((args.style ?? {}) as Record<string, unknown>) };
-			// Animation and highlight colour live on the text style, so an agent
-			// can pass them at either level and mean the same thing.
-			const animation = asString(args.animation);
-			if (animation) style.animation = animation;
-			const highlightColor = asString(args.highlightColor);
-			if (highlightColor) style.highlightColor = highlightColor;
+			// Parsed, never spread: a raw spread stored every key an agent sent,
+			// including ones the renderer has no idea about, and reported success.
+			const style = textStyleArgs(args);
+			if (style.errors.length > 0) return fail("invalid_argument", style.errors.join(" "));
+			const transform = parseTextTransform(args.transform);
+			const ignored = [...style.ignored.map((key) => `style.${key}`), ...transform.ignored];
 
 			return mutate(
 				"Update text",
 				(t) => {
 					let next = t;
 					if (content !== null) next = setClipContent(next, clipIds, content);
-					if (Object.keys(style).length > 0)
-						next = setClipTextStyle(next, clipIds, style as never);
-					if (args.transform && typeof args.transform === "object") {
-						next = setClipTransform(next, clipIds, args.transform as never);
-					}
+					if (Object.keys(style.patch).length > 0)
+						next = setClipTextStyle(next, clipIds, style.patch);
+					if (Object.keys(transform.patch).length > 0)
+						next = setClipTransform(next, clipIds, transform.patch);
 					return next;
 				},
 				(next) => ({
@@ -1187,6 +1586,7 @@ export function createAgentTools(api: EditorApi) {
 						const clip = findClip(next, id);
 						return clip ? describeClip(clip, next.fps) : { id, missing: true };
 					}),
+					...ignoredStyleReceipt(ignored),
 				}),
 			);
 		},
@@ -1422,6 +1822,12 @@ export function createAgentTools(api: EditorApi) {
 			if (!["video", "xml", "fcpxml", "rendr"].includes(mode)) {
 				return fail("invalid_argument", "mode must be video, xml, fcpxml, or rendr.");
 			}
+			if (args.preset !== undefined && mode !== "video") {
+				return fail(
+					"invalid_argument",
+					"preset sets an encode, so it only applies to video mode.",
+				);
+			}
 
 			// A timelineId picks which cut to write; rendr mode packages them all.
 			const timelineId = asString(args.timelineId);
@@ -1472,35 +1878,55 @@ export function createAgentTools(api: EditorApi) {
 					);
 				}
 				const resolution = asString(args.resolution);
+				const presetName = asString(args.preset);
+				if (resolution && presetName) {
+					return fail(
+						"invalid_argument",
+						"Pass preset or resolution, not both — a preset picks the resolution for its platform.",
+					);
+				}
+				const shortEdge = Math.min(timeline.width, timeline.height);
 				const RESOLUTIONS: Record<string, ExportSettings["resolution"]> = {
 					"Match Timeline": "source",
 					"1080p": "1080p",
 					"720p": "720p",
+					// 4K only from a timeline that has the pixels; scaling 1080
+					// up to 2160 makes a bigger file of the same picture.
+					...(shortEdge >= 2160 ? { "4K": "2160p" as const } : {}),
 				};
 				if (resolution && !RESOLUTIONS[resolution]) {
 					return fail(
 						"unsupported_resolution",
-						`Rendr renders at the timeline's own size, 1080p, or 720p. ${resolution} would be an upscale of pixels that aren't there.`,
+						`Rendr renders at the timeline's own size, 1080p, or 720p${shortEdge >= 2160 ? ", or 4K" : ""}. ${resolution} would be an upscale of pixels that aren't there.`,
 					);
+				}
+
+				let override: Partial<ExportSettings> = resolution
+					? { resolution: RESOLUTIONS[resolution] }
+					: {};
+				let platform: Record<string, unknown> | null = null;
+				if (presetName) {
+					const preset = resolveExportPreset(presetName, timeline);
+					if (!preset.ok) return fail(preset.code, preset.message, preset.detail);
+					override = preset.settings;
+					platform = preset.receipt;
 				}
 
 				try {
 					// Which encoder will take it decides both the container and
 					// how long this runs, so it is reported rather than guessed.
-					const { width, height } = exportDimensions(
-						timeline,
-						resolution
-							? { ...DEFAULT_EXPORT_SETTINGS, resolution: RESOLUTIONS[resolution] }
-							: DEFAULT_EXPORT_SETTINGS,
-					);
+					const { width, height } = exportDimensions(timeline, {
+						...DEFAULT_EXPORT_SETTINGS,
+						...override,
+					});
 					const offline = await offlineExportSupport(width, height, timeline.fps);
-					const jobId = await api.agentExport(
-						resolution ? { resolution: RESOLUTIONS[resolution] } : {},
-					);
+					const jobId = await api.agentExport(override);
 					return ok({
 						status: "started",
 						mode,
 						jobId,
+						resolution: [width, height],
+						...(platform ? { preset: platform } : {}),
 						destination: `${state.projectName}.${offline.supported ? "mp4" : "webm"}`,
 						format: offline.supported ? "MP4 (H.264/AAC)" : "WebM (VP9)",
 						encoder: offline.supported ? "webcodecs-offline" : "mediarecorder-realtime",
@@ -2397,8 +2823,22 @@ export function createAgentTools(api: EditorApi) {
 		},
 
 		async normalize_audio(args) {
-			const targetDb = asNumber(args.targetDb) ?? -18;
+			// targetDb is the old name, from when this measured unweighted RMS;
+			// it is read as LUFS now rather than refused, so older prompts work.
+			const targetLufs = asNumber(args.targetLufs) ?? asNumber(args.targetDb) ?? -14;
 			const ceilingDb = asNumber(args.ceilingDb) ?? -1;
+			if (targetLufs > -5 || targetLufs < -40) {
+				return fail(
+					"invalid_argument",
+					"targetLufs must be between -40 and -5. -14 suits YouTube, TikTok, Instagram and Spotify; -16 suits podcasts; -23 is EBU broadcast.",
+				);
+			}
+			if (ceilingDb > 0 || ceilingDb < -12) {
+				return fail(
+					"invalid_argument",
+					"ceilingDb must be between -12 and 0 dBTP. -1 is the usual delivery ceiling; -2 leaves room for lossy encoders.",
+				);
+			}
 			const asked = asArray(args.clipIds).filter(
 				(value): value is string => typeof value === "string",
 			);
@@ -2420,47 +2860,75 @@ export function createAgentTools(api: EditorApi) {
 				);
 			}
 
+			const measurements = await measureSourceLoudness(targets);
 			const measured: Array<{
 				clipId: string;
-				programDb: number;
-				peakDb: number;
-				gainDb: number;
-				limitedBy: "peak" | null;
+				integratedLufs: number;
+				truePeakDb: number;
+				previousVolumeDb: number;
+				volumeDb: number;
+				resultLufs: number;
+				limitedBy: "truePeak" | "range" | null;
 				shortfallDb: number;
+				measuredWith: number;
 			}> = [];
+			const skipped: Array<{ clipId: string; reason: string }> = [];
 			for (const clip of targets) {
-				const asset = state.assets.find((entry) => entry.id === clip.assetId);
-				if (!asset) continue;
-				const buffer = await decodeAudio(asset);
-				if (!buffer) continue;
-				const profile = measureLoudness(monoSamples(buffer), buffer.sampleRate);
-				if (profile.activeRatio === 0) continue;
-				const gain = normalizationGainDb(profile, targetDb, ceilingDb);
+				const entry = measurements.get(clip.id);
+				if (!entry || "reason" in entry) {
+					skipped.push({ clipId: clip.id, reason: entry?.reason ?? "Not measured." });
+					continue;
+				}
+				const gain = loudnessGain(entry.measurement, targetLufs, ceilingDb);
+				if (!gain || entry.measurement.integratedLufs === null) {
+					skipped.push({
+						clipId: clip.id,
+						reason: "Silent throughout — there is no programme to measure.",
+					});
+					continue;
+				}
+				// The measurement is of the raw source, so the gain is the level
+				// itself, not an adjustment to whatever level the clip had — which
+				// is what makes running this twice a no-op instead of doubling up.
+				const volumeDb = clampTo("volumeDb", gain.gainDb);
+				const rangeCapped = volumeDb < gain.gainDb;
 				measured.push({
 					clipId: clip.id,
-					programDb: profile.programDb,
-					peakDb: profile.peakDb,
-					// The level it will end up at, relative to the clip's own.
-					gainDb: gain.gainDb,
-					limitedBy: gain.limitedBy,
-					shortfallDb: gain.shortfallDb,
+					integratedLufs: entry.measurement.integratedLufs,
+					truePeakDb: entry.measurement.truePeakDb,
+					previousVolumeDb: clip.volumeDb,
+					volumeDb,
+					resultLufs: Number((entry.measurement.integratedLufs + volumeDb).toFixed(2)),
+					limitedBy: rangeCapped ? "range" : gain.limitedBy,
+					shortfallDb: rangeCapped
+						? Number(
+								(targetLufs - entry.measurement.integratedLufs - volumeDb).toFixed(
+									2,
+								),
+							)
+						: gain.shortfallDb,
+					measuredWith: entry.clipCount,
 				});
 			}
 
 			if (measured.length === 0) {
 				return fail(
 					"decode_failed",
-					"Couldn't decode any of those clips, or they are silent throughout.",
+					`Couldn't measure any of those clips. ${skipped.map((entry) => `${entry.clipId}: ${entry.reason}`).join(" ")}`,
 				);
 			}
 
-			const held = measured.filter((entry) => entry.limitedBy === "peak");
+			const held = measured.filter((entry) => entry.limitedBy !== null);
+			const method =
+				"Integrated loudness per ITU-R BS.1770-4 (K-weighted, gated at -70 LUFS and -10 LU), over the part of each source the timeline plays. Cuts of the same take are measured together and share one level, so jump cuts don't step in volume. True peak is a 4x-oversampled estimate.";
 			if (args.measureOnly === true) {
 				return ok({
 					measureOnly: true,
 					clips: measured,
-					targetDb,
-					note: "Nothing was changed. programDb is unweighted program RMS over the audible passages, not LUFS.",
+					targetLufs,
+					ceilingDb,
+					...(skipped.length ? { skipped } : {}),
+					note: `Nothing was changed. ${method}`,
 				});
 			}
 
@@ -2470,23 +2938,20 @@ export function createAgentTools(api: EditorApi) {
 					measured.reduce((acc, entry) => {
 						const clip = findClip(acc, entry.clipId);
 						if (!clip) return acc;
-						return setClipNumber(
-							acc,
-							[entry.clipId],
-							"volumeDb",
-							clip.volumeDb + entry.gainDb,
-						);
+						return setLevelKeepingAutomation(acc, clip, entry.volumeDb);
 					}, t),
 				() => ({
 					normalized: measured.length,
-					targetDb,
+					targetLufs,
+					ceilingDb,
 					clips: measured,
+					...(skipped.length ? { skipped } : {}),
 					...(held.length
 						? {
-								warning: `${held.length} ${held.length === 1 ? "clip" : "clips"} couldn't reach the target without clipping, so ${held.length === 1 ? "it was" : "they were"} left as loud as the ceiling allows. Lower targetDb, or accept the shortfall.`,
+								warning: `${held.length} ${held.length === 1 ? "clip" : "clips"} couldn't reach ${targetLufs} LUFS: ${held.some((entry) => entry.limitedBy === "truePeak") ? `its peaks would cross the ${ceilingDb} dBTP ceiling, and Rendr has no limiter, so the gain stopped there rather than clipping` : "the gain needed is beyond the +15 dB a clip level allows"}. resultLufs says where each one landed. A lower target, or a higher ceiling, closes the gap.`,
 							}
 						: {}),
-					note: "Levels measured over the audible passages only, so silence at the head didn't inflate the gain.",
+					note: `${method} Volume keyframes (a duck, say) moved by the same amount, so their shape was kept. Normalise music beds separately, about 10 LU under the voice (e.g. -24 LUFS), then duck_audio.`,
 				}),
 			);
 		},
@@ -2512,25 +2977,53 @@ export function createAgentTools(api: EditorApi) {
 			}
 
 			// Following is the point of a vertical crop of a screen recording, so
-			// it is on whenever there is telemetry to follow.
-			const follow = args.followCursor !== false && state.cursorTelemetry.length > 0;
+			// it is on whenever there is telemetry to follow — but only for the
+			// recordings themselves. Telemetry is kept per project, and camera
+			// footage in the same project must not pan along a mouse path that
+			// was never in it; with a face track, reframeTimeline frames the face.
+			const cursorTakes = new Set(
+				state.assets
+					.filter(
+						(asset) =>
+							asset.fromRecording && asset.hasCursorTelemetry && !asset.faceTrack,
+					)
+					.map((asset) => asset.id),
+			);
+			const follow =
+				args.followCursor !== false &&
+				state.cursorTelemetry.length > 0 &&
+				visual.some((clip) => clip.assetId && cursorTakes.has(clip.assetId));
 
+			// The active timeline is reframed in place, canvas and all, as one
+			// undoable step. A variant would leave every later edit — captions,
+			// a title, an export — landing on the landscape cut by default;
+			// batch_export is the tool for keeping both.
+			const previous = [timeline.width, timeline.height];
 			return mutate(
-				"Reframe",
+				`Reframe to ${name}`,
 				(t) => {
-					const reframed = reframeClips(t, aspect);
+					const reframed = reframeTimeline(t, aspect, state.assets);
 					if (!follow) return reframed;
 					return reframed.tracks
 						.filter((track) => track.kind === "video")
 						.flatMap((track) => track.clips)
-						.filter((clip) => clip.mediaType !== "text")
+						.filter(
+							(clip) =>
+								clip.mediaType !== "text" &&
+								clip.mediaType !== "audio" &&
+								clip.assetId !== undefined &&
+								cursorTakes.has(clip.assetId),
+						)
 						.reduce((acc, clip) => {
+							// Only footage wider than the frame has anywhere to pan;
+							// followKeyframes returns nothing for the rest.
 							const keys = followKeyframes(state.cursorTelemetry, {
 								clipStartFrame: clip.startFrame,
 								clipEndFrame: clip.endFrame,
 								trimStartFrame: clip.trimStartFrame,
 								fps: t.fps,
 								width: clip.transform.width,
+								height: clip.transform.height,
 							});
 							return keys.length === 0
 								? acc
@@ -2539,63 +3032,150 @@ export function createAgentTools(api: EditorApi) {
 				},
 				(next) => ({
 					aspect: name,
+					resolution: [next.width, next.height],
+					previous,
 					followingCursor: follow,
 					clips: next.tracks
 						.filter((track) => track.kind === "video")
 						.flatMap((track) => track.clips)
-						.filter((clip) => clip.mediaType !== "text")
+						.filter((clip) => clip.mediaType !== "text" && clip.mediaType !== "audio")
 						.map((clip) => ({
 							id: clip.id,
 							width: Number(clip.transform.width.toFixed(3)),
-							height: clip.transform.height,
+							height: Number(clip.transform.height.toFixed(3)),
 						})),
-					note: follow
-						? "The frame keeps its pixel size and the crop pans to keep the pointer in shot, smoothed so it follows the subject rather than mirroring the mouse. Text and captions were left alone — they are composed for the frame, not cropped from a source."
-						: "The frame keeps its pixel size; the footage is centred and cover-fitted, so nothing is letterboxed. Text and captions were left alone.",
+					note: `The canvas is now ${next.width}×${next.height}. ${
+						follow
+							? "The footage covers it and pans to keep the pointer in shot, smoothed so it follows the subject rather than mirroring the mouse."
+							: "The footage covers it, centre-cropped, so nothing is letterboxed."
+					} Insets kept their size and stay in frame; text and captions were left alone — they are composed for the frame, not cropped from a source. undo restores the ${previous[0]}×${previous[1]} cut.`,
 				}),
 			);
 		},
 
-		duck_audio(args) {
+		async duck_audio(args) {
 			const amountDb = asNumber(args.amountDb) ?? -12;
-			const rampFrames = asNumber(args.rampFrames) ?? 8;
+			const rampFrames = asNumber(args.rampFrames);
 			if (amountDb >= 0) {
 				return fail(
 					"invalid_argument",
 					"amountDb must be negative — ducking lowers a level. -12 keeps a bed audible under speech.",
 				);
 			}
-
-			// The narration track is what everything else ducks under.
-			const narration = timeline.tracks.find((track) => track.name === "Narration");
-			const spans = (narration?.clips ?? []).map((clip) => ({
-				startFrame: clip.startFrame,
-				endFrame: clip.endFrame,
-			}));
-			if (spans.length === 0) {
-				return fail(
-					"nothing_to_duck_under",
-					"There is no narration to duck under. Run narrate_timeline first, or set levels directly with set_clip_properties.",
-				);
+			const under = asString(args.under) ?? "auto";
+			if (under !== "auto" && under !== "narration" && under !== "speech") {
+				return fail("invalid_argument", "under must be 'narration', 'speech' or 'auto'.");
 			}
-
 			const asked = asArray(args.clipIds).filter(
 				(value): value is string => typeof value === "string",
 			);
-			const candidates = timeline.tracks
-				.filter((track) => track.name !== "Narration")
-				.flatMap((track) => track.clips)
-				.filter((clip) => clip.mediaType !== "text")
-				.filter((clip) => (asked.length === 0 ? true : asked.includes(clip.id)));
 
+			// The narration track is what everything else ducks under when there
+			// is one; a talking-head edit has none, and ducks under the voice in
+			// its own footage instead.
+			const narration = timeline.tracks.find((track) => track.name === "Narration");
+			const narrationSpans = (narration?.clips ?? []).map((clip) => ({
+				startFrame: clip.startFrame,
+				endFrame: clip.endFrame,
+			}));
+			const mode =
+				under === "auto" ? (narrationSpans.length > 0 ? "narration" : "speech") : under;
+			if (mode === "narration" && narrationSpans.length === 0) {
+				return fail(
+					"nothing_to_duck_under",
+					"There is no narration to duck under. Run narrate_timeline first, pass under: 'speech' to duck under the voice in the footage, or set levels directly with set_clip_properties.",
+				);
+			}
+
+			let spans: DuckSpan[];
+			let candidates: ClipModel[];
+			const listenedTo: string[] = [];
+			if (mode === "narration") {
+				spans = narrationSpans;
+				candidates = timeline.tracks
+					.filter((track) => track.name !== "Narration")
+					.flatMap((track) => track.clips)
+					.filter((clip) => clip.mediaType !== "text")
+					.filter((clip) => (asked.length === 0 ? true : asked.includes(clip.id)));
+			} else {
+				const split = splitVoiceAndBeds(timeline, {
+					voiceClipIds: stringList(args.voiceClipIds),
+					bedClipIds: asked,
+				});
+				candidates = split.beds;
+				spans = [];
+				for (const voice of split.voices) {
+					const asset = state.assets.find((entry) => entry.id === voice.assetId);
+					if (!asset || asset.offline || asset.hasAudio === false) continue;
+					const decoded = await decodeAudio(asset);
+					if (!decoded) continue;
+					// Only the stretch the clip plays: speech in a trimmed-off head
+					// mustn't duck music under some other clip.
+					const [from, to] = clipSourceWindow(voice, timeline.fps);
+					const samples = monoSamples(decoded).subarray(
+						Math.max(0, Math.floor(from * decoded.sampleRate)),
+						Math.ceil(to * decoded.sampleRate),
+					);
+					const offset =
+						Math.max(0, Math.floor(from * decoded.sampleRate)) / decoded.sampleRate;
+					const speech = detectSpeech(samples, decoded.sampleRate).map(
+						([start, end]): [number, number] => [start + offset, end + offset],
+					);
+					spans.push(...sourceSpansToTimeline(voice, speech, timeline.fps));
+					listenedTo.push(voice.id);
+				}
+				if (listenedTo.length === 0) {
+					return fail(
+						"nothing_to_duck_under",
+						"There is no audible voice to duck under — no unmuted footage or voice track with decodable audio. Name the clips that carry the voice with voiceClipIds.",
+					);
+				}
+				if (spans.length === 0) {
+					return fail(
+						"no_speech_found",
+						`No speech was detected in ${listenedTo.join(", ")}. If the voice is on another clip, name it with voiceClipIds.`,
+					);
+				}
+				if (candidates.length === 0) {
+					return fail(
+						"nothing_to_duck",
+						"There is no music or bed to duck: every clip with audio is a voice source. Pass clipIds to name the bed.",
+					);
+				}
+			}
+
+			// Under a voice the bed should clear out quickly before a word and come
+			// back unhurriedly after the phrase, so a breath doesn't swell it.
+			const attackFrames =
+				asNumber(args.attackFrames) ??
+				rampFrames ??
+				(mode === "speech" ? Math.max(1, Math.round(timeline.fps * 0.15)) : 8);
+			const releaseFrames =
+				asNumber(args.releaseFrames) ??
+				rampFrames ??
+				(mode === "speech" ? Math.max(1, Math.round(timeline.fps * 0.6)) : 8);
 			const plans = candidates
-				.map((clip) => buildDuckPlan(clip, spans, { amountDb, rampFrames }))
+				.map((clip) =>
+					buildDuckPlan(clip, spans, {
+						amountDb,
+						rampFrames: rampFrames ?? undefined,
+						attackFrames,
+						releaseFrames,
+						// Detected phrases are already bridged across pauses, so a
+						// short one is still a real line worth ducking under.
+						...(mode === "speech"
+							? { minSpanFrames: Math.round(timeline.fps * 0.2) }
+							: {}),
+					}),
+				)
 				.filter((plan): plan is NonNullable<typeof plan> => plan !== null);
 
 			if (plans.length === 0) {
 				return fail(
 					"nothing_to_duck",
-					"Nothing overlaps the narration for long enough to duck. A line has to be longer than two ramps to hold a level.",
+					mode === "speech"
+						? "No music or bed overlaps the detected speech. Check the bed sits under the talking, or pass clipIds."
+						: "Nothing overlaps the narration for long enough to duck. A line has to be longer than two ramps to hold a level.",
 				);
 			}
 
@@ -2626,10 +3206,28 @@ export function createAgentTools(api: EditorApi) {
 						clipId: plan.clipId,
 						points: plan.rows.length,
 					})),
+					under: mode,
 					amountDb,
-					rampFrames,
-					underNarrationLines: spans.length,
-					note: "Written as volume keyframes, so it is audible while scrubbing and present in the export with no bake step.",
+					attackFrames,
+					releaseFrames,
+					...(mode === "narration"
+						? { underNarrationLines: spans.length }
+						: {
+								speechSpans: spans.length,
+								speechSeconds: Number(
+									(
+										spans.reduce(
+											(sum, span) => sum + span.endFrame - span.startFrame,
+											0,
+										) / timeline.fps
+									).toFixed(1),
+								),
+								listenedTo,
+							}),
+					note:
+						mode === "speech"
+							? "Ducked under the speech detected in the footage's own audio (speech-band energy, with pauses under 0.3 s bridged). Written as volume keyframes, so it is audible while scrubbing and present in the export. Re-run after re-cutting the footage: the duck follows where the speech was when this ran."
+							: "Written as volume keyframes, so it is audible while scrubbing and present in the export with no bake step.",
 				}),
 			);
 		},
@@ -2787,6 +3385,13 @@ export function createAgentTools(api: EditorApi) {
 			}
 
 			const dryRun = args.dryRun === true;
+			// The export step only books the encode. Running it inside the
+			// workflow wrote the file before anything was committed, from an
+			// exporter whose idea of the timeline is the cut before this run —
+			// so the reframe, the cuts and the subtitles were all missing from
+			// the file. It is started once the run is committed, with the
+			// timeline the export step actually saw.
+			const booked: { timeline?: TimelineModel } = {};
 			const report = await runWorkflow(workflow, {
 				timeline,
 				assets: state.assets,
@@ -2803,9 +3408,9 @@ export function createAgentTools(api: EditorApi) {
 							},
 					export: dryRun
 						? async () => ({ path: "(dry run — no file written)" })
-						: async () => {
-								const jobId = await api.agentExport({});
-								return { path: `export job ${jobId}` };
+						: async ({ timeline: built }) => {
+								booked.timeline = built;
+								return { path: "export starts once the run is committed" };
 							},
 				},
 			});
@@ -2825,16 +3430,39 @@ export function createAgentTools(api: EditorApi) {
 
 			// Committed once, at the end: a failure part way through must leave
 			// the timeline exactly as it was.
-			return mutate(
+			const receipt = {
+				ran: workflow.name,
+				steps,
+				note: "Every step succeeded, so the timeline was committed as one undoable change.",
+			};
+			const committed = mutate(
 				`Run ${workflow.name}`,
 				() => report.timeline ?? timeline,
-				() => ({
-					ran: workflow.name,
-					steps,
-					...(report.outputPath ? { output: report.outputPath } : {}),
-					note: "Every step succeeded, so the timeline was committed as one undoable change.",
-				}),
+				() => receipt,
 			);
+			const toExport = booked.timeline;
+			if (!toExport) return committed;
+
+			try {
+				// Handed the timeline explicitly: the exporter was registered by
+				// the render before this commit and would otherwise read the
+				// old cut.
+				const jobId = await api.agentExport({}, toExport);
+				return ok({
+					...receipt,
+					exportJobId: jobId,
+					note: `${receipt.note} The export was started after the commit, from the committed timeline; poll manage_exports with the jobId.`,
+				});
+			} catch (error) {
+				// The edit stands — it succeeded and is one undo away — but the
+				// file does not exist, and saying otherwise is the worst outcome.
+				return ok({
+					...receipt,
+					exportError:
+						error instanceof Error ? error.message : "The export couldn't be started.",
+					note: `${receipt.note} The export did not start; call export_project to retry.`,
+				});
+			}
 		},
 
 		manage_workflows(args) {
@@ -3164,15 +3792,21 @@ export function createAgentTools(api: EditorApi) {
 				null;
 
 			// Style, animation and placement apply to the clips this call makes.
-			const style = { ...((args.style ?? {}) as Record<string, unknown>) };
-			const animation = asString(args.animation);
-			if (animation) style.animation = animation;
-			const highlightColor = asString(args.highlightColor);
-			if (highlightColor) style.highlightColor = highlightColor;
+			const style = textStyleArgs(args);
+			if (style.errors.length > 0) return fail("invalid_argument", style.errors.join(" "));
+			const transform = parseTextTransform(args.transform);
+			const ignored = [...style.ignored.map((key) => `style.${key}`), ...transform.ignored];
+			const perCaption = asNumber(args.wordsPerCaption) ?? asNumber(args.maxWords);
+			if (perCaption !== null && (perCaption < 1 || perCaption > 20))
+				return fail("invalid_argument", "wordsPerCaption must be between 1 and 20.");
 			const placement = {
-				style: Object.keys(style).length ? style : undefined,
-				transform: (args.transform ?? null) as Record<string, unknown> | null,
-				maxWords: asNumber(args.maxWords),
+				style: Object.keys(style.patch).length
+					? (style.patch as Record<string, unknown>)
+					: undefined,
+				transform: Object.keys(transform.patch).length
+					? (transform.patch as Record<string, unknown>)
+					: null,
+				maxWords: perCaption === null ? null : Math.round(perCaption),
 			};
 
 			if (subtitles) {
@@ -3183,6 +3817,7 @@ export function createAgentTools(api: EditorApi) {
 						status: "added",
 						source: "subtitles",
 						captionGroupId: groupId,
+						...ignoredStyleReceipt(ignored),
 						...(asString(args.language)
 							? {
 									note: "`language` is ignored for supplied subtitles — the cues are used exactly as given.",
@@ -3202,6 +3837,7 @@ export function createAgentTools(api: EditorApi) {
 			// it started rather than blocking the call for minutes.
 			void api.transcribe(host, placement);
 			return ok({
+				...ignoredStyleReceipt(ignored),
 				status: "started",
 				note: "Transcription runs locally and can take a while. Poll get_transcript, or pass `subtitles` to skip it.",
 			});
@@ -3379,14 +4015,24 @@ export function createAgentTools(api: EditorApi) {
 					// halves whose text no longer matches. Rebuild them instead.
 					for (const groupId of groups) next = removeCaptionGroup(next, groupId);
 
+					// Every surviving word comes back, even one with no length:
+					// local Whisper gives some tokens zero duration, and a word
+					// whose start fell inside a cut ends up "ending" before it
+					// starts. Dropping those silently deleted words from the
+					// captions that were never cut from the audio.
+					const frameMs = 1000 / next.fps;
 					const kept = survivors
-						.map((word) => ({
-							text: word.text,
-							startMs:
-								((word.startFrame - shiftAt(word.startFrame)) / next.fps) * 1000,
-							endMs: ((word.endFrame - shiftAt(word.endFrame)) / next.fps) * 1000,
-						}))
-						.filter((word) => word.endMs > word.startMs)
+						.map((word) => {
+							const startMs =
+								((word.startFrame - shiftAt(word.startFrame)) / next.fps) * 1000;
+							const endMs =
+								((word.endFrame - shiftAt(word.endFrame)) / next.fps) * 1000;
+							return {
+								text: word.text,
+								startMs,
+								endMs: Math.max(endMs, startMs + frameMs),
+							};
+						})
 						.sort((a, b) => a.startMs - b.startMs);
 
 					if (kept.length === 0) return next;
@@ -4046,6 +4692,9 @@ export function createAgentTools(api: EditorApi) {
 					const name =
 						asString(args.name) ?? path.split(/[\\/]/).pop() ?? "Imported file";
 					file = new File([new Uint8Array(read.data)], name);
+					// Remembered so analysis can read the file in place and a
+					// reopened project can relink it.
+					(file as PathedFile).rendrSourcePath = path;
 				} else if (bytes) {
 					const mimeType = asString(source.mimeType);
 					if (!mimeType)
@@ -5788,7 +6437,9 @@ export function createAgentTools(api: EditorApi) {
 		},
 
 		async measure_audio(args) {
-			const target = asNumber(args.targetDb) ?? -16;
+			// targetDb is the pre-LUFS name, still honoured.
+			const target = asNumber(args.targetLufs) ?? asNumber(args.targetDb) ?? -14;
+			const ceilingDb = asNumber(args.ceilingDb) ?? -1;
 			const asked = stringList(args.clipIds);
 			const audible = timeline.tracks
 				.flatMap((track) => track.clips.map((clip) => ({ track, clip })))
@@ -5808,65 +6459,106 @@ export function createAgentTools(api: EditorApi) {
 					note: "Nothing to measure — no unmuted audio or video clips matched.",
 				});
 
+			const measurements = await measureSourceLoudness(audible.map(({ clip }) => clip));
 			const rows: Array<Record<string, unknown>> = [];
 			for (const { track, clip } of audible) {
-				const asset = state.assets.find((entry) => entry.id === clip.assetId);
-				if (!asset || asset.offline) {
+				const entry = measurements.get(clip.id);
+				if (!entry || "reason" in entry) {
 					rows.push({
 						clipId: clip.id,
 						name: clip.name,
 						measured: false,
-						reason: asset
-							? "Media is offline — relink the file to measure it."
-							: "This clip has no asset.",
+						reason: entry?.reason ?? "Not measured.",
 					});
 					continue;
 				}
-				const decoded = await decodeAudio(asset);
-				if (!decoded) {
-					rows.push({
-						clipId: clip.id,
-						name: clip.name,
-						measured: false,
-						reason: "No decodable audio stream.",
-					});
-					continue;
-				}
-				const samples = monoSamples(decoded);
-				const loudness = measureLoudness(samples, decoded.sampleRate);
-				const suggestion = normalizationGainDb(loudness, target);
+				const { measurement } = entry;
+				const suggestion = loudnessGain(measurement, target, ceilingDb);
 				rows.push({
 					clipId: clip.id,
 					name: clip.name,
 					trackName: track.name,
-					programDb: Number(loudness.programDb.toFixed(1)),
-					peakDbfs: Number(loudness.peakDb.toFixed(1)),
-					activeRatio: Number(loudness.activeRatio.toFixed(2)),
-					currentGainDb: clip.volumeDb,
-					suggestedGainDb: Number(suggestion.gainDb.toFixed(1)),
-					...(suggestion.limitedBy === "peak"
+					integratedLufs: measurement.integratedLufs,
+					// What it sounds like at its current level, keyframes aside.
+					...(measurement.integratedLufs !== null
 						? {
-								limitedBy: "peak",
-								shortfallDb: Number(suggestion.shortfallDb.toFixed(1)),
+								playingLufs: Number(
+									(measurement.integratedLufs + clip.volumeDb).toFixed(1),
+								),
 							}
 						: {}),
+					truePeakDbtp: measurement.truePeakDb,
+					samplePeakDbfs: measurement.samplePeakDb,
+					maxMomentaryLufs: measurement.maxMomentaryLufs,
+					speechSeconds: measurement.gatedSeconds,
+					measuredSeconds: measurement.measuredSeconds,
+					...(entry.clipCount > 1 ? { measuredWithOtherCuts: entry.clipCount - 1 } : {}),
+					currentGainDb: clip.volumeDb,
+					...(suggestion
+						? {
+								suggestedGainDb: Number(
+									clampTo("volumeDb", suggestion.gainDb).toFixed(1),
+								),
+								...(suggestion.limitedBy
+									? {
+											limitedBy: suggestion.limitedBy,
+											shortfallDb: suggestion.shortfallDb,
+										}
+									: {}),
+							}
+						: { note: "Silent throughout — nothing passed the -70 LUFS gate." }),
 					measured: true,
 				});
 			}
 
-			const measured = rows.filter((row) => row.measured);
-			const spread = measured.length
-				? Math.max(...measured.map((row) => row.programDb as number)) -
-					Math.min(...measured.map((row) => row.programDb as number))
-				: 0;
+			const playing = rows
+				.map((row) => row.playingLufs)
+				.filter((value): value is number => typeof value === "number");
+			const spread = playing.length > 1 ? Math.max(...playing) - Math.min(...playing) : 0;
+
+			// What a platform actually measures is the finished mix — voice, bed,
+			// ducks and all — so report that too unless only some clips were asked about.
+			let mix: Record<string, unknown> | undefined;
+			if (args.includeMix === true || (args.includeMix !== false && asked.length === 0)) {
+				try {
+					const rendered = await renderTimelineAudio(
+						timeline,
+						state.assets,
+						computeTotalFrames(timeline),
+					);
+					if (rendered) {
+						const channels = Array.from(
+							{ length: rendered.numberOfChannels },
+							(_, index) => rendered.getChannelData(index),
+						);
+						const measured = measureIntegratedLoudness(channels, rendered.sampleRate);
+						mix = {
+							integratedLufs: measured.integratedLufs,
+							truePeakDbtp: measured.truePeakDb,
+							...(measured.integratedLufs !== null
+								? {
+										offTargetLu: Number(
+											(measured.integratedLufs - target).toFixed(1),
+										),
+									}
+								: {}),
+						};
+					}
+				} catch {
+					mix = { measured: false, reason: "The mix couldn't be rendered here." };
+				}
+			}
+
 			return ok({
 				clips: rows,
-				targetDb: target,
-				...(measured.length > 1 ? { loudnessSpreadDb: Number(spread.toFixed(1)) } : {}),
+				targetLufs: target,
+				ceilingDb,
+				...(mix ? { mix } : {}),
+				...(playing.length > 1 ? { loudnessSpreadLu: Number(spread.toFixed(1)) } : {}),
 				note:
-					spread > 6
-						? `These clips vary by ${spread.toFixed(1)} dB, which is audible as a jump between them. normalize_audio evens it out.`
-						: "Nothing was changed. normalize_audio applies the suggested gains.",
+					spread > 3
+						? `These clips play ${spread.toFixed(1)} LU apart, which is audible as a jump between them. normalize_audio evens it out.`
+						: "Nothing was changed. normalize_audio applies the suggested gains. Loudness is ITU-R BS.1770-4 integrated (LUFS); true peak is a 4x-oversampled estimate.",
 			});
 		},
 
@@ -5896,38 +6588,61 @@ export function createAgentTools(api: EditorApi) {
 			const pan = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }[direction] ?? [
 				0, 0,
 			];
-			// Normalized canvas units: 0.5 is the centre, so a full-frame travel
-			// is 1.0 and `amount` reads as a fraction of the frame.
-			const startX = zooming ? 0.5 : 0.5 - (pan[0] * amount) / 2;
-			const startY = zooming ? 0.5 : 0.5 - (pan[1] * amount) / 2;
-			const endX = zooming ? 0.5 + (focusX - 0.5) * amount : 0.5 + (pan[0] * amount) / 2;
-			const endY = zooming ? 0.5 + (focusY - 0.5) * amount : 0.5 + (pan[1] * amount) / 2;
 
 			return mutate(
 				"Ken Burns",
 				(t) =>
 					mapClips(t, clipIds, (clip) => {
 						const last = Math.max(1, clip.endFrame - clip.startFrame - 1);
+						// Everything is measured against the clip's own box, not the
+						// canvas: scale rows are absolute sizes, so writing a bare
+						// factor would blow an inset up to fill the frame, and a
+						// push sized to the canvas would travel too far on a small
+						// clip and expose its edge.
+						const { centerX, centerY, width, height } = clip.transform;
+						const row = (scale: number, cx: number, cy: number) => ({
+							size: [width * scale, height * scale],
+							position: positionRow(cx, cy, width * scale, height * scale),
+						});
+						let from: ReturnType<typeof row>;
+						let to: ReturnType<typeof row>;
+						if (zooming) {
+							// The focus point is the one spot of the picture that
+							// holds still while the rest grows away from it. Growing
+							// a box that covers the frame about a point inside it
+							// can only cover more, so no edge is ever exposed.
+							const anchorX = centerX - width / 2 + focusX * width;
+							const anchorY = centerY - height / 2 + focusY * height;
+							const about = (scale: number) =>
+								row(
+									scale,
+									anchorX + (0.5 - focusX) * width * scale,
+									anchorY + (0.5 - focusY) * height * scale,
+								);
+							from = about(startScale);
+							to = about(endScale);
+						} else {
+							// Oversized by `headroom` for the whole move and kept
+							// within that margin, so the picture's own edge never
+							// slides into frame mid-travel.
+							const travelX = (pan[0] * amount * width) / 2;
+							const travelY = (pan[1] * amount * height) / 2;
+							from = row(headroom, centerX - travelX, centerY - travelY);
+							to = row(headroom, centerX + travelX, centerY + travelY);
+						}
 						return {
 							...clip,
-							// Scale is oversized for the whole move, so the clip
-							// never shows its own edge mid-travel.
-							transform: { ...clip.transform },
 							keyframes: {
 								...clip.keyframes,
 								// Replaced, not merged: two competing moves on one
 								// clip is not a move anybody asked for.
 								scale: [
-									{
-										frame: 0,
-										values: [startScale, startScale],
-										interp: "smooth",
-									},
-									{ frame: last, values: [endScale, endScale], interp: "smooth" },
+									{ frame: 0, values: from.size, interp: "smooth" },
+									{ frame: last, values: to.size, interp: "smooth" },
 								],
 								position: [
-									{ frame: 0, values: [startX, startY], interp: "smooth" },
-									{ frame: last, values: [endX, endY], interp: "smooth" },
+									{ frame: 0, values: from.position, interp: "smooth" },
+									{ frame: last, values: to.position, interp: "smooth" },
 								],
 							},
 						};
@@ -5936,7 +6651,7 @@ export function createAgentTools(api: EditorApi) {
 					animated: clipIds.length,
 					direction,
 					amount,
-					note: `Scale runs ${startScale.toFixed(2)}→${endScale.toFixed(2)} with a smooth ease. Any position or scale keyframes these clips had were replaced.`,
+					note: `The picture runs ${startScale.toFixed(2)}×→${endScale.toFixed(2)}× its own size with a smooth ease, so an inset stays an inset. Any position or scale keyframes these clips had were replaced.`,
 				}),
 			);
 		},
@@ -6029,12 +6744,16 @@ export function createAgentTools(api: EditorApi) {
 						const endAt = at === "in" ? move : Math.max(1, span - 1);
 						const restX = clip.transform.centerX;
 						const restY = clip.transform.centerY;
-						const offX = restX + offset[0];
-						const offY = restY + offset[1];
 						const next = { ...clip, keyframes: { ...clip.keyframes } };
 
 						if (preset === "slide" || preset === "drift") {
 							const travel = preset === "drift" ? 0.12 : 1;
+							// Moves are planned in centres and written as the top-left
+							// corner rows carry, against the size the clip has at that
+							// frame — otherwise the clip comes to rest offset by half
+							// its own width instead of where it was placed.
+							const rowAt = (frame: number, cx: number, cy: number) =>
+								positionRow(cx, cy, ...boxSizeAt(clip, frame));
 							const awayX = restX + offset[0] * travel;
 							const awayY = restY + offset[1] * travel;
 							next.keyframes.position =
@@ -6042,24 +6761,24 @@ export function createAgentTools(api: EditorApi) {
 									? [
 											{
 												frame: startAt,
-												values: [awayX, awayY],
+												values: rowAt(startAt, awayX, awayY),
 												interp: "smooth",
 											},
 											{
 												frame: endAt,
-												values: [restX, restY],
+												values: rowAt(endAt, restX, restY),
 												interp: "smooth",
 											},
 										]
 									: [
 											{
 												frame: startAt,
-												values: [restX, restY],
+												values: rowAt(startAt, restX, restY),
 												interp: "smooth",
 											},
 											{
 												frame: endAt,
-												values: [awayX, awayY],
+												values: rowAt(endAt, awayX, awayY),
 												interp: "smooth",
 											},
 										];
@@ -6084,19 +6803,21 @@ export function createAgentTools(api: EditorApi) {
 											];
 							}
 						} else if (preset === "pop") {
+							// Scale rows are absolute sizes, so "full" is the clip's
+							// own box. Writing a bare 1 would land a lower third at
+							// the size of the whole frame.
+							const { width, height } = clip.transform;
+							const small = [width * 0.6, height * 0.6];
+							const full = [width, height];
 							next.keyframes.scale =
 								at === "in"
 									? [
-											{
-												frame: startAt,
-												values: [0.6, 0.6],
-												interp: "smooth",
-											},
-											{ frame: endAt, values: [1, 1], interp: "smooth" },
+											{ frame: startAt, values: small, interp: "smooth" },
+											{ frame: endAt, values: full, interp: "smooth" },
 										]
 									: [
-											{ frame: startAt, values: [1, 1], interp: "smooth" },
-											{ frame: endAt, values: [0.6, 0.6], interp: "smooth" },
+											{ frame: startAt, values: full, interp: "smooth" },
+											{ frame: endAt, values: small, interp: "smooth" },
 										];
 							next.keyframes.opacity =
 								at === "in"
@@ -6136,9 +6857,6 @@ export function createAgentTools(api: EditorApi) {
 											{ frame: endAt, values: [0], interp: "linear" },
 										];
 						}
-						// unused when the offsets are zero, but kept honest
-						void offX;
-						void offY;
 						return next;
 					}),
 				() => ({
@@ -6828,83 +7546,26 @@ export function createAgentTools(api: EditorApi) {
 					`No caption group '${wanted}'. Present: ${groups.join(", ")}.`,
 				);
 
-			const patch: Record<string, unknown> = {};
-			const family = asString(args.fontFamily);
-			if (family) patch.fontFamily = family;
-			const size = asNumber(args.fontSize);
-			if (size !== null) {
-				if (size < CLIP_LIMITS.fontSize.min || size > CLIP_LIMITS.fontSize.max)
-					return fail(
-						"invalid_argument",
-						`fontSize must be ${CLIP_LIMITS.fontSize.min}–${CLIP_LIMITS.fontSize.max}.`,
-					);
-				patch.fontSize = Math.round(size);
+			// The flat fields and a nested `style` both go through the one parser,
+			// so style_captions accepts exactly what update_text does.
+			const flat: Record<string, unknown> = {};
+			for (const [key, value] of Object.entries(args)) {
+				if (["groupId", "preset", "wordsPerCaption", "style"].includes(key)) continue;
+				flat[key] = value;
 			}
-			const color = asString(args.color);
-			if (color) {
-				if (!/^#[0-9a-fA-F]{6}$/.test(color))
-					return fail(
-						"invalid_argument",
-						`color must be a hex like '#FFEE00', not '${color}'.`,
-					);
-				patch.color = color.toUpperCase();
-			}
-			for (const flag of ["bold", "italic", "uppercase"] as const)
-				if (typeof args[flag] === "boolean") patch[flag] = args[flag];
-			const alignment = asString(args.alignment);
-			if (alignment) {
-				if (!["left", "center", "right"].includes(alignment))
-					return fail("invalid_argument", `Unknown alignment '${alignment}'.`);
-				patch.alignment = alignment;
-			}
-			const animation = asString(args.animation);
-			if (animation) {
-				if (!TEXT_ANIMATIONS.includes(animation))
-					return fail(
-						"invalid_argument",
-						`Unknown animation '${animation}'. One of ${TEXT_ANIMATIONS.join(", ")}.`,
-					);
-				patch.animation = animation;
-			}
-			const plate = asString(args.backgroundColor);
-			if (plate) {
-				if (plate.toLowerCase() === "none") {
-					// Explicitly cleared rather than left undefined, or the merge
-					// below would keep whatever plate was already there.
-					patch.backgroundColor = undefined;
-				} else if (!/^#[0-9a-fA-F]{6}$/.test(plate)) {
-					return fail(
-						"invalid_argument",
-						`backgroundColor must be a hex like '#000000' or 'none', not '${plate}'.`,
-					);
-				} else {
-					patch.backgroundColor = plate.toUpperCase();
-				}
-			}
-			for (const key of [
-				"backgroundOpacity",
-				"backgroundPadding",
-				"backgroundRadius",
-			] as const) {
-				const value = asNumber(args[key]);
-				if (value === null) continue;
-				if (value < 0 || value > 1)
-					return fail("invalid_argument", `${key} must be between 0 and 1.`);
-				patch[key] = value;
-			}
-
-			const highlight = asString(args.highlightColor);
-			if (highlight) {
-				if (!/^#[0-9a-fA-F]{6}$/.test(highlight))
-					return fail(
-						"invalid_argument",
-						`highlightColor must be a hex like '#FFE14D', not '${highlight}'.`,
-					);
-				patch.highlightColor = highlight.toUpperCase();
-			}
+			const nested =
+				args.style && typeof args.style === "object" && !Array.isArray(args.style)
+					? (args.style as Record<string, unknown>)
+					: {};
+			const parsed = parseTextStyle({ ...nested, ...flat });
+			if (parsed.errors.length > 0) return fail("invalid_argument", parsed.errors.join(" "));
+			const patch = parsed.patch;
+			const perCaption = asNumber(args.wordsPerCaption);
+			if (perCaption !== null && (perCaption < 1 || perCaption > 20))
+				return fail("invalid_argument", "wordsPerCaption must be between 1 and 20.");
 
 			const presetName = asString(args.preset);
-			let applied = patch;
+			let applied: TextStylePatch = patch;
 			if (presetName) {
 				const preset = CAPTION_PRESETS[presetName];
 				if (!preset)
@@ -6914,12 +7575,12 @@ export function createAgentTools(api: EditorApi) {
 					);
 				// Preset underneath, explicit arguments on top — so a caller can
 				// take a whole look and still override one thing about it.
-				applied = { ...preset, ...patch };
+				applied = { ...scalePresetToCanvas(preset, timeline), ...patch };
 			}
-			if (Object.keys(applied).length === 0)
+			if (Object.keys(applied).length === 0 && perCaption === null)
 				return fail(
 					"invalid_argument",
-					"Pass a preset, or at least one style property to change.",
+					"Pass a preset, wordsPerCaption, or at least one style property to change.",
 				);
 
 			// Every clip in the group at once: restyling them one at a time is
@@ -6943,21 +7604,46 @@ export function createAgentTools(api: EditorApi) {
 					(clip) => targets.includes(clip.id) && (clip.captionWords?.length ?? 0) > 0,
 				);
 
+			const warnings = [
+				...((ignoredStyleReceipt(parsed.ignored).warnings as string[] | undefined) ?? []),
+				...(perWord && timed.length === 0
+					? [
+							`'${applied.animation}' is a per-word animation and none of these captions carry word timings, so they will animate as whole lines. narrate_timeline writes the timings; add_captions from an SRT may not.`,
+						]
+					: []),
+			];
+			const regrouped = wanted ? [wanted] : groups;
 			return mutate(
 				"Style captions",
-				(t) => setClipTextStyle(t, targets, applied),
-				() => ({
+				(t) => {
+					let next =
+						Object.keys(applied).length > 0 ? setClipTextStyle(t, targets, applied) : t;
+					// Re-cut after restyling, so the new clips inherit the new look.
+					if (perCaption !== null)
+						for (const group of regrouped)
+							next = rechunkCaptionGroup(
+								next,
+								group,
+								Math.round(perCaption),
+							).timeline;
+					return next;
+				},
+				(next) => ({
 					styled: targets.length,
-					groups: wanted ? [wanted] : groups,
+					groups: regrouped,
 					...(presetName ? { preset: presetName } : {}),
-					applied,
-					...(perWord && timed.length === 0
+					...(perCaption !== null
 						? {
-								warnings: [
-									`'${applied.animation}' is a per-word animation and none of these captions carry word timings, so they will animate as whole lines. narrate_timeline writes the timings; add_captions from an SRT may not.`,
-								],
+								wordsPerCaption: Math.round(perCaption),
+								clipCount: regrouped.reduce(
+									(sum, group) => sum + captionClips(next, group).length,
+									0,
+								),
 							}
 						: {}),
+					applied,
+					...(parsed.ignored.length > 0 ? { ignoredStyleKeys: parsed.ignored } : {}),
+					...(warnings.length > 0 ? { warnings } : {}),
 				}),
 			);
 		},
@@ -7078,7 +7764,6 @@ export function createAgentTools(api: EditorApi) {
 			// the reframes and the trims, so the third variant would be reframed
 			// three times and cut to a third of the length.
 			const snapshot = timeline;
-			const even = (value: number) => Math.max(16, Math.round(value / 2) * 2);
 			const built: Array<Record<string, unknown>> = [];
 
 			for (const plan of plans) {
@@ -7090,17 +7775,11 @@ export function createAgentTools(api: EditorApi) {
 					return fail("failed", `Couldn't create the '${plan.name}' variant timeline.`);
 
 				const [w, h] = aspects[plan.aspect];
-				const shortEdge = Math.min(snapshot.width, snapshot.height);
-				const width = even(w >= h ? (shortEdge * w) / h : shortEdge);
-				const height = even(w >= h ? shortEdge : (shortEdge * h) / w);
-				const canvasAspect = width / height;
 				const cutAt =
 					plan.maxSeconds === null ? null : Math.round(plan.maxSeconds * snapshot.fps);
 
-				const variant: TimelineModel = {
+				const trimmed: TimelineModel = {
 					...created,
-					width,
-					height,
 					tracks: created.tracks.map((track) => ({
 						...track,
 						clips: track.clips
@@ -7108,28 +7787,17 @@ export function createAgentTools(api: EditorApi) {
 							// retimes, and retiming a variant silently changes how
 							// the narration sounds.
 							.filter((clip) => cutAt === null || clip.startFrame < cutAt)
-							.map((clip) => {
-								const trimmed =
-									cutAt !== null && clip.endFrame > cutAt
-										? { ...clip, endFrame: cutAt }
-										: clip;
-								if (trimmed.mediaType === "audio" || trimmed.mediaType === "text")
-									return trimmed;
-								// Cover the new frame: the source has to be at
-								// least as wide as the canvas in the axis it is
-								// short on, or the reframe shows background.
-								const source = aspectOf(trimmed, canvasAspect);
-								const cover =
-									source >= canvasAspect
-										? { width: source / canvasAspect, height: 1 }
-										: { width: 1, height: canvasAspect / source };
-								return {
-									...trimmed,
-									transform: { ...trimmed.transform, ...cover },
-								};
-							}),
+							.map((clip) =>
+								cutAt !== null && clip.endFrame > cutAt
+									? { ...clip, endFrame: cutAt }
+									: clip,
+							),
 					})),
 				};
+				// The same reframe reframe_timeline performs, so a variant and an
+				// in-place reframe of one cut come out framed identically.
+				const variant = reframeTimeline(trimmed, w / h, state.assets);
+				const { width, height } = variant;
 				api.replaceTimeline(variant);
 				built.push({
 					timelineId: variant.id,

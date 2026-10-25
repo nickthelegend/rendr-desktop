@@ -238,33 +238,56 @@ export interface DuckPlan {
  * Each span gets four points: full level, down, down, back up. The ramps are
  * what stop a duck sounding like a gate; without them the bed cuts out on the
  * narrator's first syllable.
+ *
+ * Attack and release can differ. Under a creator's own voice the bed should get
+ * out of the way quickly before the first word (a short attack, landing as the
+ * word starts) and come back slowly after the last (a longer release), so a
+ * pause for breath doesn't swell the music up between sentences.
  */
 export function buildDuckPlan(
 	clip: ClipModel,
 	spans: readonly DuckSpan[],
-	options: { amountDb?: number; rampFrames?: number } = {},
+	options: {
+		amountDb?: number;
+		rampFrames?: number;
+		/** Frames to ramp down over, before each span. Defaults to rampFrames. */
+		attackFrames?: number;
+		/** Frames to ramp back up over, after each span. Defaults to rampFrames. */
+		releaseFrames?: number;
+		/**
+		 * Spans no longer than this are skipped. Defaults to two ramps — a
+		 * narration line that short would ramp down and straight back up. Speech
+		 * spans from the voice detector are already phrase-length, so they pass
+		 * a smaller floor.
+		 */
+		minSpanFrames?: number;
+	} = {},
 ): DuckPlan | null {
 	const amount = options.amountDb ?? -12;
 	const ramp = Math.max(1, Math.round(options.rampFrames ?? 8));
+	const attack = Math.max(1, Math.round(options.attackFrames ?? ramp));
+	const release = Math.max(1, Math.round(options.releaseFrames ?? ramp));
+	const minSpan = Math.max(0, options.minSpanFrames ?? ramp * 2);
 	const base = clip.volumeDb;
 
 	// Only the parts of a span that actually overlap this clip matter, and a
-	// span shorter than two ramps cannot hold its ducked level.
+	// span too short to hold its ducked level is skipped.
 	const overlapping = spans
 		.map((span) => ({
 			startFrame: Math.max(span.startFrame, clip.startFrame),
 			endFrame: Math.min(span.endFrame, clip.endFrame),
 		}))
-		.filter((span) => span.endFrame - span.startFrame > ramp * 2)
+		.filter((span) => span.endFrame - span.startFrame > minSpan)
 		.sort((a, b) => a.startFrame - b.startFrame);
 	if (overlapping.length === 0) return null;
 
 	// Merged, so two lines close together duck once and stay down between them
-	// rather than lifting for the gap and dipping again.
+	// rather than lifting for the gap and dipping again. A gap shorter than a
+	// release plus an attack couldn't reach full level before ducking again.
 	const merged: DuckSpan[] = [];
 	for (const span of overlapping) {
 		const last = merged[merged.length - 1];
-		if (last && span.startFrame - last.endFrame <= ramp * 2) {
+		if (last && span.startFrame - last.endFrame <= attack + release) {
 			last.endFrame = Math.max(last.endFrame, span.endFrame);
 			continue;
 		}
@@ -274,10 +297,10 @@ export function buildDuckPlan(
 	const rows: Array<[number, number]> = [];
 	const local = (frame: number) => Math.max(0, Math.round(frame - clip.startFrame));
 	for (const span of merged) {
-		rows.push([local(span.startFrame - ramp), base]);
+		rows.push([local(span.startFrame - attack), base]);
 		rows.push([local(span.startFrame), base + amount]);
 		rows.push([local(span.endFrame), base + amount]);
-		rows.push([local(span.endFrame + ramp), base]);
+		rows.push([local(span.endFrame + release), base]);
 	}
 
 	// Rows must be ordered and unique per frame, or sampling picks arbitrarily.
@@ -287,4 +310,74 @@ export function buildDuckPlan(
 		clipId: clip.id,
 		rows: [...byFrame.entries()].sort((a, b) => a[0] - b[0]),
 	};
+}
+
+// ── Ducking under the creator's own voice ─────────────────────────────
+
+/** Track names that carry a voice rather than a bed. */
+const VOICE_TRACK = /narrat|voice|\bvo\b|dialog|mic|speech|host|interview|podcast/i;
+
+/**
+ * Splits the timeline into the clips that carry the voice and the clips that
+ * should duck under it.
+ *
+ * A talking-head edit keeps the voice in the camera footage itself, on a video
+ * track, so every video-track clip counts as a voice source along with audio
+ * tracks named like one ("Voice", "Mic", "Dialogue"). Everything else on an
+ * audio track is a bed. Either side can be named explicitly when the guess is
+ * wrong — b-roll with loud ambience on the video track, say — and a clip is
+ * never ducked under itself.
+ */
+export function splitVoiceAndBeds(
+	timeline: TimelineModel,
+	options: { voiceClipIds?: readonly string[]; bedClipIds?: readonly string[] } = {},
+): { voices: ClipModel[]; beds: ClipModel[] } {
+	const voiceIds = options.voiceClipIds?.length ? new Set(options.voiceClipIds) : null;
+	const bedIds = options.bedClipIds?.length ? new Set(options.bedClipIds) : null;
+	const voices: ClipModel[] = [];
+	const beds: ClipModel[] = [];
+	for (const track of timeline.tracks) {
+		const voiceTrack = track.kind === "video" || VOICE_TRACK.test(track.name);
+		for (const clip of track.clips) {
+			if (clip.mediaType === "text" || clip.mediaType === "image") continue;
+			// A voice nobody can hear can't be talked over.
+			const isVoice = voiceIds
+				? voiceIds.has(clip.id)
+				: voiceTrack && isAudible(timeline, track) && !bedIds?.has(clip.id);
+			if (isVoice) {
+				voices.push(clip);
+				continue;
+			}
+			if (bedIds ? bedIds.has(clip.id) : !voiceTrack) beds.push(clip);
+		}
+	}
+	return { voices, beds };
+}
+
+/** The stretch of its source a clip plays, in source seconds. */
+export function clipSourceWindow(clip: ClipModel, fps: number): [number, number] {
+	const start = clip.trimStartFrame / fps;
+	return [start, start + ((clip.endFrame - clip.startFrame) * clip.speed) / fps];
+}
+
+/**
+ * Speech found in a clip's source, as timeline spans a duck can follow.
+ *
+ * The same mapping the timeline uses everywhere — trim, then speed — and
+ * clamped to the clip, so speech in the trimmed-off head of a take doesn't
+ * duck music under a different clip.
+ */
+export function sourceSpansToTimeline(
+	clip: ClipModel,
+	spans: ReadonlyArray<readonly [number, number]>,
+	fps: number,
+): DuckSpan[] {
+	const toFrame = (seconds: number) =>
+		clip.startFrame + (seconds * fps - clip.trimStartFrame) / clip.speed;
+	return spans
+		.map(([from, to]) => ({
+			startFrame: Math.round(Math.max(clip.startFrame, toFrame(from))),
+			endFrame: Math.round(Math.min(clip.endFrame, toFrame(to))),
+		}))
+		.filter((span) => span.endFrame > span.startFrame);
 }

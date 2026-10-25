@@ -40,6 +40,12 @@ const helpers = [
 		source: "NativeCursorMonitor.swift",
 		output: "recordly-native-cursor-monitor",
 	},
+	{
+		// Person matte and face track for camera footage (background removal,
+		// face-following reframes). Uses Apple's Vision framework; no model download.
+		source: "RendrVision.swift",
+		output: "rendr-vision",
+	},
 ];
 
 const swiftcCheck = spawnSync("swiftc", ["--version"], { encoding: "utf8" });

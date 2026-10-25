@@ -30,13 +30,15 @@ import {
 import { applyLuts, buildChannelLuts, type ChannelLuts } from "./curves";
 import { clipFilter } from "./effects";
 import type { FrameSource } from "./frameSource";
+import { drawGraphic } from "./graphics";
 import { clipAtFrame, clipOpacityAt } from "./keyframes";
+import { drawMatted } from "./matte";
 import type { AssetModel } from "./media";
 import { audioBufferToWav, renderTimelineAudio } from "./mixdown";
 import { applyPixelGrade, needsPixelGrade, type PixelGrade } from "./pixelGrade";
 import type { TimelineModel } from "./reducers";
 import { frameToClipSourceMs } from "./state";
-import { isPerWord, resolveTextAnimation, wordColor } from "./textAnimation";
+import { drawTextInBox } from "./textLayout";
 import { type WebcamSettings, webcamBox, webcamSourceRect } from "./webcam";
 import {
 	type CameraSpringState,
@@ -50,11 +52,20 @@ import {
 } from "./zoom";
 
 export interface ExportSettings {
-	/** Long-edge resolution. "source" keeps the timeline's own size. */
-	resolution: "source" | "1080p" | "720p";
+	/**
+	 * Short-edge resolution, so "1080p" means 1920×1080 landscape and 1080×1920
+	 * vertical alike. "source" keeps the timeline's own size.
+	 */
+	resolution: "source" | "2160p" | "1080p" | "720p";
 	format: "webm";
 	/** 0–1; maps onto the encoder's bitrate. */
 	quality: number;
+	/**
+	 * An exact video bitrate in bits per second, overriding the one `quality`
+	 * implies. Platform presets set it, because what a platform recommends is a
+	 * number, not a fraction of a curve.
+	 */
+	bitrate?: number;
 }
 
 export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
@@ -70,16 +81,19 @@ export function exportDimensions(
 	if (settings.resolution === "source") {
 		return { width: timeline.width, height: timeline.height };
 	}
-	const targetHeight = settings.resolution === "1080p" ? 1080 : 720;
-	const scale = targetHeight / timeline.height;
+	const target = { "2160p": 2160, "1080p": 1080, "720p": 720 }[settings.resolution];
+	// The short edge, not the height: scaling a 1080×1920 timeline to a 1080
+	// height made "1080p" of a vertical video a 608×1080 file.
+	const scale = target / Math.min(timeline.width, timeline.height);
 	// Encoders reject odd dimensions, so round both axes to even numbers.
 	return {
 		width: Math.round((timeline.width * scale) / 2) * 2,
-		height: Math.round(targetHeight / 2) * 2,
+		height: Math.round((timeline.height * scale) / 2) * 2,
 	};
 }
 
-function bitrateFor(width: number, height: number, quality: number): number {
+function bitrateFor(width: number, height: number, quality: number, exact?: number): number {
+	if (exact && exact > 0) return Math.round(exact);
 	// Roughly 0.1 bits per pixel per frame at full quality, which lands in the
 	// range browsers encode well.
 	const pixels = width * height;
@@ -148,6 +162,14 @@ export interface DecodedSources {
 	 * cursor than through a seek per frame. Absent means "seek".
 	 */
 	frames?: Map<string, FrameSource>;
+	/** Footage asset id → its person matte's asset id, for background removal. */
+	mattes?: Map<string, string>;
+	/**
+	 * Takes that carry cursor telemetry. The project keeps one pointer path,
+	 * and it belongs to its screen recordings: drawn over camera footage it is
+	 * a mouse pointer floating over somebody's face.
+	 */
+	cursorTakes?: Set<string>;
 }
 
 export async function decodeSources(assets: readonly AssetModel[]): Promise<DecodedSources> {
@@ -184,7 +206,17 @@ export async function decodeSources(assets: readonly AssetModel[]): Promise<Deco
 			),
 	);
 
-	return { video, image };
+	const mattes = new Map<string, string>();
+	for (const asset of assets) {
+		if (asset.matteAssetId && video.has(asset.matteAssetId))
+			mattes.set(asset.id, asset.matteAssetId);
+	}
+
+	const cursorTakes = new Set(
+		assets.filter((asset) => asset.hasCursorTelemetry).map((asset) => asset.id),
+	);
+
+	return { video, image, mattes, cursorTakes };
 }
 
 /** Seeks a video and waits for the frame to actually be ready. */
@@ -375,6 +407,28 @@ export async function renderFrame(
 			context.setTransform(1, 0, 0, 1, 0, 0);
 		}
 
+		/*
+		 * Graphics are drawn in frame space too, for the same reason: a mind map
+		 * or a QR code belongs to the finished frame, and a punch-in on the
+		 * speaker should move them, not the cards around them.
+		 */
+		if (clip.mediaType === "graphic") {
+			if (clip.graphic) {
+				context.setTransform(1, 0, 0, 1, 0, 0);
+				context.globalAlpha = opacity;
+				drawGraphic(
+					context,
+					clip.graphic,
+					(frame - clip.startFrame) / timeline.fps,
+					(clip.endFrame - clip.startFrame) / timeline.fps,
+					width,
+					height,
+				);
+			}
+			context.restore();
+			continue;
+		}
+
 		context.globalAlpha = opacity;
 		context.filter = clipFilter(clip);
 		context.translate(boxX + boxW / 2, boxY + boxH / 2);
@@ -383,128 +437,16 @@ export async function renderFrame(
 		context.translate(-boxW / 2, -boxH / 2);
 
 		if (clip.mediaType === "text") {
-			// The same resolver the preview uses, so the file matches playback.
-			const anim = resolveTextAnimation(clip, frame, timeline.fps);
-			const style = clip.textStyle;
-			const preset = style?.animation ?? "off";
-			const size = ((style?.fontSize ?? 48) / timeline.height) * height;
-			const cased = (value: string) => (style?.uppercase ? value.toUpperCase() : value);
-
-			context.filter = "none";
-			context.globalAlpha = opacity * anim.opacity;
-			context.font = `${style?.italic ? "italic " : ""}${style?.bold ? "700" : "400"} ${size}px ${style?.fontFamily ?? "sans-serif"}`;
-			context.textBaseline = "middle";
-			// Entrance offset and scale apply about the block's centre.
-			context.translate(boxW / 2, boxH / 2 + anim.offsetY * boxH);
-			context.scale(anim.scale, anim.scale);
-
-			// The plate is drawn first, sized from the text that is about to go on
-			// top of it. Both branches need it, so the measurement happens here
-			// rather than being duplicated inside each.
-			if (style?.backgroundColor) {
-				const cased2 = cased;
-				const perWordNow = isPerWord(preset) && anim.words.length > 0;
-				const spaceW = context.measureText(" ").width;
-				let plateW: number;
-				let plateLines: number;
-				if (perWordNow) {
-					const ws = anim.words.map((w) => context.measureText(cased2(w.text)).width);
-					plateW = ws.reduce((a, b) => a + b, 0) + spaceW * Math.max(0, ws.length - 1);
-					plateLines = 1;
-				} else {
-					const text = cased2(anim.visibleText ?? clip.content ?? "");
-					const rows = text.split("\n");
-					plateW = Math.max(...rows.map((row) => context.measureText(row).width), 0);
-					plateLines = rows.length;
-				}
-				if (plateW > 0) {
-					const pad = size * (style.backgroundPadding ?? 0.35);
-					const lineHeight = size * 1.15;
-					const h = lineHeight * plateLines + pad * 2 - size * 0.15;
-					const w = plateW + pad * 2;
-					const originX =
-						style.alignment === "left"
-							? -boxW / 2 - pad
-							: style.alignment === "right"
-								? boxW / 2 - w + pad
-								: -w / 2;
-					const originY = -h / 2;
-					const radius = Math.min(h / 2, h * (style.backgroundRadius ?? 0.25));
-					const previousAlpha = context.globalAlpha;
-					context.globalAlpha = opacity * anim.opacity * (style.backgroundOpacity ?? 1);
-					context.fillStyle = style.backgroundColor;
-					context.beginPath();
-					// roundRect is not everywhere; the manual path keeps the
-					// encoder and the preview drawing the same shape.
-					context.moveTo(originX + radius, originY);
-					context.lineTo(originX + w - radius, originY);
-					context.quadraticCurveTo(originX + w, originY, originX + w, originY + radius);
-					context.lineTo(originX + w, originY + h - radius);
-					context.quadraticCurveTo(
-						originX + w,
-						originY + h,
-						originX + w - radius,
-						originY + h,
-					);
-					context.lineTo(originX + radius, originY + h);
-					context.quadraticCurveTo(originX, originY + h, originX, originY + h - radius);
-					context.lineTo(originX, originY + radius);
-					context.quadraticCurveTo(originX, originY, originX + radius, originY);
-					context.closePath();
-					context.fill();
-					context.globalAlpha = previousAlpha;
-				}
-			}
-
-			if (isPerWord(preset) && anim.words.length > 0) {
-				// Word-by-word is laid out by hand: each word carries its own
-				// colour and opacity, so one fillText can't draw the line.
-				const spaceWidth = context.measureText(" ").width;
-				const widths = anim.words.map(
-					(word) => context.measureText(cased(word.text)).width,
-				);
-				const total =
-					widths.reduce((sum, w) => sum + w, 0) + spaceWidth * (widths.length - 1);
-				context.textAlign = "left";
-				let cursor =
-					style?.alignment === "left"
-						? -boxW / 2
-						: style?.alignment === "right"
-							? boxW / 2 - total
-							: -total / 2;
-				anim.words.forEach((word, index) => {
-					const paint = wordColor(
-						preset,
-						word,
-						style?.color ?? "#fff",
-						style?.highlightColor ?? "#F29933",
-					);
-					context.globalAlpha = opacity * anim.opacity * paint.opacity;
-					context.fillStyle = paint.color;
-					context.fillText(cased(word.text), cursor, 0);
-					cursor += widths[index] + spaceWidth;
-				});
-			} else {
-				context.fillStyle = style?.color ?? "#fff";
-				context.textAlign =
-					style?.alignment === "left"
-						? "left"
-						: style?.alignment === "right"
-							? "right"
-							: "center";
-				const text = cased(anim.visibleText ?? clip.content ?? "");
-				const lines = text.split("\n");
-				const lineHeight = size * 1.15;
-				const originX =
-					style?.alignment === "left"
-						? -boxW / 2
-						: style?.alignment === "right"
-							? boxW / 2
-							: 0;
-				lines.forEach((line, index) => {
-					context.fillText(line, originX, (index - (lines.length - 1) / 2) * lineHeight);
-				});
-			}
+			// The preview paints text with this same function, so wrapping,
+			// outlines and the active-word pop export exactly as they play.
+			drawTextInBox(context, clip, {
+				width,
+				height,
+				timelineHeight: timeline.height,
+				frame,
+				fps: timeline.fps,
+				opacity,
+			});
 		} else {
 			// The decoder first, then the <video>, then a still.
 			const sourceMs = frameToClipSourceMs(clip, frame, timeline.fps);
@@ -546,17 +488,47 @@ export async function renderFrame(
 					context.beginPath();
 					context.rect(0, 0, boxW, boxH);
 					context.clip();
-					context.drawImage(
-						source,
-						sx,
-						sy,
-						sw,
-						sh,
-						(boxW - drawW) / 2,
-						(boxH - drawH) / 2,
-						drawW,
-						drawH,
-					);
+					const matte = clip.background
+						? await matteFrameFor(clip.assetId ?? "", sourceMs, sources)
+						: null;
+					if (clip.background && matte) {
+						// The grade belongs to the person and a blurred backdrop, not
+						// to a flat colour behind them, so drawMatted applies it itself.
+						const gradeFilter = context.filter;
+						context.filter = "none";
+						drawMatted(context, {
+							source,
+							matte,
+							crop,
+							dest: {
+								x: (boxW - drawW) / 2,
+								y: (boxH - drawH) / 2,
+								width: drawW,
+								height: drawH,
+							},
+							boxWidth: boxW,
+							boxHeight: boxH,
+							background: clip.background,
+							backgroundImage: clip.background.imageAssetId
+								? (sources.image.get(clip.background.imageAssetId) ?? null)
+								: null,
+							pixelScale: height / 1080,
+							gradeFilter,
+						});
+						context.filter = gradeFilter;
+					} else {
+						context.drawImage(
+							source,
+							sx,
+							sy,
+							sw,
+							sh,
+							(boxW - drawW) / 2,
+							(boxH - drawH) / 2,
+							drawW,
+							drawH,
+						);
+					}
 					if (luts || pixels) {
 						applyLutsToRegion(context, boxW, boxH, luts, pixels);
 					}
@@ -580,7 +552,11 @@ export async function renderFrame(
 	// The drawn pointer sits inside the camera transform, so a punch-in
 	// magnifies it exactly as it magnifies the picture — the same as the preview.
 	if (cursor && cursor.telemetry.length > 0) {
-		const host = visible.find((clip) => clip.mediaType === "video");
+		const host = visible.find(
+			(clip) =>
+				clip.mediaType === "video" &&
+				(!sources.cursorTakes || sources.cursorTakes.has(clip.assetId ?? "")),
+		);
 		const resolved = host
 			? resolveCursor(
 					cursor.telemetry,
@@ -600,6 +576,26 @@ export async function renderFrame(
 	}
 
 	context.restore();
+}
+
+/**
+ * The person matte's frame at the footage's source time — decoded when a
+ * decoder took the matte, otherwise from its seeked <video>. Null when the
+ * footage has no matte yet, so the caller draws it untouched.
+ */
+async function matteFrameFor(
+	footageAssetId: string,
+	sourceMs: number,
+	sources: DecodedSources,
+): Promise<CanvasImageSource | null> {
+	const matteId = sources.mattes?.get(footageAssetId);
+	if (!matteId) return null;
+	const decoded = (await sources.frames?.get(matteId)?.frameAt(sourceMs / 1000)) ?? null;
+	if (decoded) return decoded;
+	const element = sources.video.get(matteId);
+	if (!element) return null;
+	await seek(element, sourceMs / 1000);
+	return element;
 }
 
 /**
@@ -994,7 +990,7 @@ export function exportTimeline(
 		const chunks: Blob[] = [];
 		const recorder = new MediaRecorder(stream, {
 			mimeType,
-			videoBitsPerSecond: bitrateFor(width, height, settings.quality),
+			videoBitsPerSecond: bitrateFor(width, height, settings.quality, settings.bitrate),
 		});
 		recorder.ondataavailable = (event) => {
 			if (event.data.size > 0) chunks.push(event.data);

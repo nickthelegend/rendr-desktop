@@ -20,8 +20,10 @@
 import { autoZoomRegions } from "./autoZoom";
 import { narrationCues, placeCaptions, removeCaptionGroup } from "./captions";
 import type { CommentModel } from "./comments";
+import { boxSizeAt, positionRow } from "./keyframes";
 import type { AssetModel } from "./media";
-import { type ClipModel, withDefaults, type ZoomRegionModel } from "./model";
+import { type ClipModel, type Transform, withDefaults, type ZoomRegionModel } from "./model";
+import { clipFace, faceFollowKeyframes, frameFace } from "./punchIns";
 import { splitAt, type TimelineModel } from "./reducers";
 import { nodeLabel, runOrder, type WorkflowModel, type WorkflowNode } from "./workflow";
 
@@ -29,8 +31,17 @@ import { nodeLabel, runOrder, type WorkflowModel, type WorkflowNode } from "./wo
 export interface WorkflowHooks {
 	/** Speaks the notes and returns what was laid down. Absent means no voice. */
 	narrate?: () => Promise<{ spoken: number; lines: NarratedLine[] }>;
-	/** Writes a file. Absent means export cannot run. */
-	export?: (settings: { aspect?: string }) => Promise<{ path: string } | null>;
+	/**
+	 * Writes a file. Absent means export cannot run.
+	 *
+	 * Handed the timeline the run has built, because nothing is committed until
+	 * the run succeeds: an exporter that read the editor's own timeline would
+	 * write the cut as it was before the workflow touched it.
+	 */
+	export?: (settings: {
+		aspect?: string;
+		timeline: TimelineModel;
+	}) => Promise<{ path: string } | null>;
 }
 
 export interface NarratedLine {
@@ -75,37 +86,187 @@ export const ASPECTS: Record<string, number> = {
 	"16:9": 16 / 9,
 };
 
+/** Encoders reject odd sizes, and anything under 16 px is not a frame. */
+const even = (value: number) => Math.max(16, Math.round(value / 2) * 2);
+
 /**
- * Recomposes every visual clip for a new aspect.
- *
- * The frame keeps the project's pixel size; what changes is the box the footage
- * occupies, centred and cover-fitted, so a 16:9 screen recording reframed to
- * 9:16 shows the middle of the screen rather than a letterboxed miniature.
+ * The canvas a reframe produces: the requested aspect at the project's short
+ * edge, so 1920×1080 becomes 1080×1920 for 9:16 rather than a 608-wide
+ * thumbnail, and a 4K project stays 4K.
  */
-export function reframeClips(timeline: TimelineModel, aspect: number): TimelineModel {
-	const projectAspect = timeline.width / timeline.height;
-	// Width the footage needs so its height fills the target frame.
-	const width = projectAspect / aspect;
+export function canvasForAspect(
+	width: number,
+	height: number,
+	aspect: number,
+): { width: number; height: number } {
+	const shortEdge = Math.min(width, height);
+	return aspect >= 1
+		? { width: even(shortEdge * aspect), height: even(shortEdge) }
+		: { width: even(shortEdge), height: even(shortEdge / aspect) };
+}
+
+type Box = Pick<Transform, "centerX" | "centerY" | "width" | "height">;
+
+/** Whether a box fills the frame — the footage, as opposed to an inset over it. */
+function fillsFrame(box: Box): boolean {
+	const slack = 0.01;
+	return (
+		box.centerX - box.width / 2 <= slack &&
+		box.centerY - box.height / 2 <= slack &&
+		box.centerX + box.width / 2 >= 1 - slack &&
+		box.centerY + box.height / 2 >= 1 - slack
+	);
+}
+
+/** The picture's own aspect after its crop, or null when the asset can't say. */
+function pictureAspect(clip: ClipModel, assets: readonly AssetModel[]): number | null {
+	const asset = assets.find((entry) => entry.id === clip.assetId);
+	if (!asset || asset.width <= 0 || asset.height <= 0) return null;
+	const visibleW = asset.width * (1 - clip.crop.left - clip.crop.right);
+	const visibleH = asset.height * (1 - clip.crop.top - clip.crop.bottom);
+	return visibleW > 0 && visibleH > 0 ? visibleW / visibleH : null;
+}
+
+/**
+ * Carries a clip's motion from its old box to its new one.
+ *
+ * Position and scale rows are absolute canvas values, so a Ken Burns written
+ * for the landscape frame would, untouched, snap the picture back to its
+ * landscape size the moment the reframed clip played. Each keyframed box is
+ * mapped the same way the static box was — offset from the old centre, scaled
+ * by how much the box grew — so the move survives relative to the picture.
+ */
+function remapMotion(clip: ClipModel, from: Box, to: Box): ClipModel["keyframes"] {
+	const tracks = clip.keyframes;
+	if (!tracks || (!tracks.position && !tracks.scale)) return tracks;
+	if (from.width <= 0 || from.height <= 0) return tracks;
+	const kx = to.width / from.width;
+	const ky = to.height / from.height;
+	const next = { ...tracks };
+	if (tracks.position) {
+		next.position = tracks.position.map((row) => {
+			// The corner only means something against the size at that frame.
+			const [w, h] = boxSizeAt(clip, row.frame);
+			const cx = to.centerX + (row.values[0] + w / 2 - from.centerX) * kx;
+			const cy = to.centerY + (row.values[1] + h / 2 - from.centerY) * ky;
+			return { ...row, values: positionRow(cx, cy, w * kx, h * ky) };
+		});
+	}
+	if (tracks.scale) {
+		next.scale = tracks.scale.map((row) => ({
+			...row,
+			values: [row.values[0] * kx, row.values[1] * ky],
+		}));
+	}
+	return next;
+}
+
+/**
+ * Recomposes a timeline for a new aspect: the canvas itself changes size.
+ *
+ * Keeping the old canvas and widening the footage's box is what this used to
+ * do, and on a 16:9 project it produced a zoomed landscape rather than a
+ * vertical video — the box is clipped to the frame, so nothing about the
+ * output's shape ever changed. The canvas now takes the target aspect at the
+ * project's short edge, and the footage gets a box shaped like its own picture
+ * that covers the new frame, centred. The renderer cover-fits into that box, so
+ * the result is a centre crop, and because the box is the picture's own shape
+ * a position track can pan it (that is what the cursor follow does).
+ *
+ * Insets — anything that did not fill the old frame — keep their size in
+ * pixels and stay inside the new frame, so a picture-in-picture is still one.
+ * Text is left alone; it is composed for the frame rather than cropped from a
+ * source.
+ */
+export function reframeTimeline(
+	timeline: TimelineModel,
+	aspect: number,
+	assets: readonly AssetModel[],
+): TimelineModel {
+	const canvas = canvasForAspect(timeline.width, timeline.height, aspect);
+	const canvasAspect = canvas.width / canvas.height;
+	// Normalised units are fractions of the canvas, so holding an inset's pixel
+	// size means rescaling by how much each axis of the canvas changed.
+	const keepX = timeline.width / canvas.width;
+	const keepY = timeline.height / canvas.height;
+	const inside = (center: number, size: number) =>
+		size >= 1 ? center : Math.min(1 - size / 2, Math.max(size / 2, center));
+
+	const refit = (clip: ClipModel): ClipModel => {
+		const from = clip.transform;
+		let to: Box;
+		if (fillsFrame(from)) {
+			// An offline asset can't say how wide it is, but the box it filled
+			// was drawn at the shape the viewer saw, which is the next best thing.
+			const picture =
+				pictureAspect(clip, assets) ??
+				(from.width * timeline.width) / (from.height * timeline.height);
+			to =
+				picture >= canvasAspect
+					? { centerX: 0.5, centerY: 0.5, width: picture / canvasAspect, height: 1 }
+					: { centerX: 0.5, centerY: 0.5, width: 1, height: canvasAspect / picture };
+			// A centre crop of a talking head often cuts the speaker in half; with
+			// a face track the crop slides to them instead, face in the upper third.
+			const face = clipFace(
+				clip,
+				assets.find((asset) => asset.id === clip.assetId),
+				timeline.fps,
+			);
+			if (face) to = frameFace(to, face, picture, canvasAspect, { x: 0.5, y: 0.38 });
+			// A speaker who moves gets a crop that follows them — but only where
+			// no motion was authored, which remapMotion is about to carry over.
+			if (face && !clip.keyframes?.position?.length) {
+				const follow = faceFollowKeyframes(
+					clip,
+					to,
+					assets.find((asset) => asset.id === clip.assetId),
+					timeline.fps,
+					picture,
+					canvasAspect,
+				);
+				if (follow.length > 0) {
+					return {
+						...clip,
+						transform: { ...clip.transform, ...to },
+						keyframes: { ...(remapMotion(clip, from, to) ?? {}), position: follow },
+						faceFollow: true,
+					};
+				}
+			}
+		} else {
+			const width = from.width * keepX;
+			const height = from.height * keepY;
+			to = {
+				centerX: inside(from.centerX, width),
+				centerY: inside(from.centerY, height),
+				width,
+				height,
+			};
+		}
+		return {
+			...clip,
+			transform: { ...clip.transform, ...to },
+			keyframes: remapMotion(clip, from, to),
+		};
+	};
+
 	return {
 		...timeline,
+		width: canvas.width,
+		height: canvas.height,
 		tracks: timeline.tracks.map((track) =>
 			track.kind !== "video"
 				? track
 				: {
 						...track,
 						clips: track.clips.map((clip) =>
-							clip.mediaType === "text"
+							// Graphics are drawn in frame coordinates, so they follow
+							// the new canvas on their own; refitting would distort them.
+							clip.mediaType === "text" ||
+							clip.mediaType === "audio" ||
+							clip.mediaType === "graphic"
 								? clip
-								: {
-										...clip,
-										transform: {
-											...clip.transform,
-											centerX: 0.5,
-											centerY: 0.5,
-											width: Math.max(width, 1),
-											height: 1,
-										},
-									},
+								: refit(clip),
 						),
 					},
 		),
@@ -216,7 +377,8 @@ async function runStep(
 					error: `No aspect '${name}'. Use one of: ${Object.keys(ASPECTS).join(", ")}.`,
 				};
 			}
-			return { timeline: reframeClips(timeline, aspect), detail: `to ${name}` };
+			const next = reframeTimeline(timeline, aspect, context.assets);
+			return { timeline: next, detail: `to ${name} (${next.width}×${next.height})` };
 		}
 
 		case "auto-zoom": {
@@ -348,7 +510,7 @@ async function runStep(
 				return { error: "Export needs the encoder, which this window has no access to." };
 			}
 			const aspect = typeof node.params.aspect === "string" ? node.params.aspect : undefined;
-			const written = await context.hooks.export({ aspect });
+			const written = await context.hooks.export({ aspect, timeline });
 			if (!written) return { error: "The export produced no file." };
 			return { timeline, detail: written.path };
 		}
@@ -418,6 +580,10 @@ export async function runWorkflow(
  * every jitter is unwatchable, and the point of following is to keep the
  * subject in shot, not to mirror the mouse. Returns position keyframes in the
  * transform's own units, clamped so the crop never runs off the footage.
+ *
+ * Rows carry the box's top-left corner, as every position row does. The pan is
+ * planned in centres and converted on the way out; handing the centre over
+ * as-is put the footage's left edge at mid-frame.
  */
 export function followKeyframes(
 	telemetry: readonly { timeMs: number; cx: number; cy: number }[],
@@ -428,11 +594,13 @@ export function followKeyframes(
 		fps: number;
 		/** How wide the footage is, in frames of the output. 1 means it fits. */
 		width: number;
+		/** How tall the footage's box is, in frames of the output. Default 1. */
+		height?: number;
 		/** Frames between samples. Larger is calmer. */
 		everyFrames?: number;
 	},
 ): Array<{ frame: number; values: [number, number]; interp: "smooth" }> {
-	const { clipStartFrame, clipEndFrame, trimStartFrame, fps, width } = options;
+	const { clipStartFrame, clipEndFrame, trimStartFrame, fps, width, height = 1 } = options;
 	const step = Math.max(1, Math.round(options.everyFrames ?? 12));
 	if (telemetry.length === 0 || width <= 1) return [];
 
@@ -474,9 +642,10 @@ export function followKeyframes(
 		// inside the footage so no edge is ever exposed.
 		const wanted = 0.5 + (0.5 - point.cx) * (width - 1);
 		const centerX = Math.min(0.5 + reach, Math.max(0.5 - reach, wanted));
+		const [left, top] = positionRow(centerX, 0.5, width, height);
 		return {
 			frame: point.frame,
-			values: [Number(centerX.toFixed(4)), 0.5] as [number, number],
+			values: [Number(left.toFixed(4)), Number(top.toFixed(4))] as [number, number],
 			interp: "smooth" as const,
 		};
 	});

@@ -131,6 +131,32 @@ describe("relinking", () => {
 		expect(relinked[0].offline).toBe(false);
 	});
 
+	it("keeps the project's pairings when relinking, not the fresh import's blanks", () => {
+		// A relink used to replace the whole record with the new import, which
+		// silently dropped the camera take, the folder and the person matte.
+		const saved = asset({
+			webcamAssetId: "cam",
+			folder: "A-roll",
+			matteAssetId: "matte",
+			personCoverage: 0.8,
+			faceTrack: { width: 1, height: 1, duration: 1, interval: 1, samples: [] },
+		});
+		const offline = [offlineAsset(toManifest(saved))];
+		const { relinked } = relinkAssets(offline, [
+			asset({ id: "fresh", url: "blob:new", width: 3840 }),
+		]);
+		expect(relinked[0]).toMatchObject({
+			id: "a1",
+			url: "blob:new",
+			width: 3840,
+			webcamAssetId: "cam",
+			folder: "A-roll",
+			matteAssetId: "matte",
+			personCoverage: 0.8,
+		});
+		expect(relinked[0].faceTrack).toBeDefined();
+	});
+
 	it("leaves an asset offline when nothing matches", () => {
 		const offline = [offlineAsset(toManifest(asset()))];
 		const { relinked, unmatched } = relinkAssets(offline, [
@@ -190,5 +216,32 @@ describe("recording settings", () => {
 		const file = parseProject(JSON.stringify(raw));
 		expect(file.cursor?.size).toBe(2);
 		expect(file.cursor?.bounceSpeed).toBe(DEFAULT_CURSOR.bounceSpeed);
+	});
+});
+
+describe("relinking one asset by id", () => {
+	it("gives two same-named takes each their own file", () => {
+		const first = offlineAsset(toManifest(asset({ id: "a1", name: "IMG_0001.MOV" })));
+		const file = asset({
+			id: "fresh",
+			name: "IMG_0001.MOV",
+			url: "blob:b",
+			sourcePath: "/b/IMG_0001.MOV",
+		});
+		// Only a2 is being relinked: the file goes to it, not to a1.
+		const second = offlineAsset(toManifest(asset({ id: "a2", name: "IMG_0001.MOV" })));
+		const { relinked } = relinkAssets([second], [file], { pairExactly: true });
+		expect(relinked[0]).toMatchObject({
+			id: "a2",
+			url: "blob:b",
+			sourcePath: "/b/IMG_0001.MOV",
+		});
+		expect(first.offline).toBe(true);
+	});
+
+	it("forgets a stale path when relinked from a file that has none", () => {
+		const saved = offlineAsset(toManifest(asset({ sourcePath: "/old/take.mov" })));
+		const { relinked } = relinkAssets([saved], [asset({ id: "fresh", url: "blob:n" })]);
+		expect(relinked[0].sourcePath).toBeUndefined();
 	});
 });

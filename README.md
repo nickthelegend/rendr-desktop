@@ -2,19 +2,29 @@
 
 <img src="public/branding/rendr-logo.svg" alt="Rendr" width="360" />
 
-**Record and edit in one app — driven by humans and agents alike.**
+**Record and edit in one app — driven by humans and agents alike. Built for creators.**
 
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-2563eb?style=for-the-badge)](LICENSE.md)
-[![MCP](https://img.shields.io/badge/MCP-50%20tools-7c3aed?style=for-the-badge)](#the-mcp-server)
+[![MCP](https://img.shields.io/badge/MCP-108%20tools-7c3aed?style=for-the-badge)](#rendr-connect--any-agent-any-model)
 
 </div>
 
-Rendr is an open-source Electron app that captures screen video and edits it in the
-same place. Every capability is exposed twice: once as a UI a person uses, and once
-as an [MCP](https://modelcontextprotocol.io) tool an agent calls. Neither is a
-wrapper around the other — a recording an agent starts runs through exactly the
-same pipeline as one a person starts, and the preview and the exported file are
-rendered by the same functions.
+Rendr is an open-source video editor you can drive by talking to an AI agent. It
+records screen video and edits it in the same place, and it edits creators'
+camera footage: talking-head YouTube videos, Shorts, Reels and TikToks. It
+cuts pauses and retakes, punches in on your face, captions word by word,
+removes the background, draws animated mind maps behind you, reframes to 9:16,
+makes the thumbnail, and exports for each platform. **[CREATORS.md](CREATORS.md)**
+is the guide for creators.
+
+Every capability is exposed twice: once as a UI a person uses, and once as an
+[MCP](https://modelcontextprotocol.io) tool an agent calls. Neither is a wrapper
+around the other. A recording an agent starts runs through exactly the same
+pipeline as one a person starts, and the preview and the exported file are
+rendered by the same functions. Bring any agent: Claude Code, Codex, Gemini CLI,
+OpenCode, any ACP agent, an API key or a local model. You can also plug Rendr
+into the one you already use, including claude.ai and ChatGPT
+(see [Rendr Connect](#rendr-connect--any-agent-any-model)).
 
 ---
 
@@ -160,21 +170,94 @@ clock, so the encoder lines them up without drift correction.
 
 ---
 
-## The MCP server
+## For creators: talking-head editing by asking
 
-Rendr runs an MCP server on `127.0.0.1:19790` so **Claude Code, or any agent-driven
-IDE**, can drive the editor. It speaks streamable HTTP JSON-RPC.
+Rendr edits camera footage as well as screen recordings, and it's built to
+be driven by an agent. **[CREATORS.md](CREATORS.md)** is the non-technical
+guide. In short:
 
-### Connecting from Claude Code
+| Tool | What it does |
+|---|---|
+| `analyze_footage` | On-device person matte and face track, using Apple's Vision framework. No upload and no model download. Cached per file. |
+| `remove_background` | Replaces the background with a colour, a blur, an image, or transparency, so lower tracks show through. Preview and export match. |
+| `add_graphic` | Animated mind maps, key points, lower thirds, callouts and QR codes, laid out around the speaker's face and around each other. Can go behind the speaker. |
+| `find_retakes` | Finds abandoned takes and stutters in the transcript. Proposes cutting the earlier attempts and keeping the last. |
+| `create_thumbnail` | YouTube thumbnails and Shorts covers: the cut-out speaker at their closest moment, with a sticker outline, a stroked title and highlight words. |
+| `add_punch_ins` | Jump-cut punch-ins on alternate segments that keep the face still on screen, or a slow push. Re-runnable. |
+| `reframe_timeline` | Real 9:16 / 1:1 canvases. With a face track, the crop follows the speaker. |
+| `normalize_audio` / `measure_audio` | BS.1770 integrated loudness to platform targets, with a true-peak ceiling. |
+| `duck_audio` | Ducks music under detected speech, not only under TTS narration. |
+| `export_project` presets | `youtube`, `shorts`, `reels`, `tiktok`, `square`. |
+
+Recipes (`edit_talking_head`, `make_short`, `explainer_look`, `thumbnail`,
+`clean_audio`, `add_key_points`) are served as MCP prompts, so they appear as slash commands
+in MCP clients. Each one hands the agent a complete plan in Rendr's tool
+names. They're also available at `/v1/recipes` and through `rendr recipe <name>`.
+
+## Rendr Connect — any agent, any model
+
+Rendr has no model of its own and no lock-in. It works in both directions.
+
+### Bring your own agent to the panel
+
+The agent panel answers with whatever you already pay for. Pick it in **Agent → settings**:
+
+| Agent | What it uses |
+|---|---|
+| **Claude Code** | your Claude Pro / Max / Team plan, through the `claude` CLI |
+| **Codex** | your ChatGPT plan, through the `codex` CLI |
+| **Any ACP agent** | Gemini CLI, OpenCode, Goose, Qwen Code, the Claude Code / Codex ACP adapters, or any command that speaks the [Agent Client Protocol](https://agentclientprotocol.com) |
+| **API key / local model** | OpenAI, Anthropic, OpenRouter, Google Gemini, Groq, DeepSeek, Mistral, xAI, Together, any OpenAI-compatible endpoint, or a local Ollama / LM Studio model |
+
+CLIs and ACP agents get Rendr's MCP server handed to them. The API path runs Rendr's
+own tool loop in-process. Every call lands in the panel as a receipt either way. API keys
+are encrypted with the OS keychain and never reach the renderer. ACP agents are allowed
+to run Rendr's tools and nothing else: a request to run a shell command or edit a file is
+refused.
+
+### Plug Rendr into any agent
+
+The **plug** button in the agent panel opens Rendr Connect:
+
+- **Apps**: one-click setup for Claude Code, Codex, Gemini CLI, OpenCode, Cursor, VS Code
+  (Copilot), Windsurf, Claude Desktop and LM Studio, plus copy-paste snippets for Zed and
+  any stdio client. Rendr merges one key into each app's config, keeps a backup, and never
+  rewrites a file it can't fully parse.
+- **Cloud**: remote access for agents that can't reach your machine, such as claude.ai,
+  ChatGPT (developer mode), custom GPTs, Le Chat and hosted agent platforms. It opens a
+  second, token-protected listener behind a Cloudflare quick tunnel (or your own ngrok /
+  Tailscale URL) and gives you one connector URL. It's off by default, off again on every
+  launch, and the token can be rotated instantly.
+- **Developers**: every tool as plain HTTP.
+
+| Surface | Where |
+|---|---|
+| MCP (streamable HTTP) | `http://127.0.0.1:19790/mcp` |
+| MCP (stdio) | `npm run mcp:bridge`, or `rendr mcp` |
+| Call a tool | `POST /v1/call` with `{"name": "...", "arguments": {...}}` |
+| Tool schemas | `GET /v1/tools?format=openai\|openai-responses\|anthropic\|gemini\|mcp` |
+| OpenAPI 3.1 | `/openapi.json` (3 operations, fits a custom GPT) · `/openapi.full.json` (one per tool) |
+| Agent manual | `/llms.txt` |
 
 ```bash
 claude mcp add --transport http rendr http://127.0.0.1:19790/mcp
+codex mcp add rendr --url http://127.0.0.1:19790/mcp
+gemini mcp add --scope user --transport http rendr http://127.0.0.1:19790/mcp
 ```
 
-Any other MCP-capable client works the same way — point it at that URL while Rendr
-is running.
+### The `rendr` command
 
-### What the agent can do — 101 tools
+For agents that only have a shell. Install it from **Connect → Apps**. It runs on
+Rendr's own runtime, so Node isn't required.
+
+```bash
+rendr status
+rendr tools --format openai          # schemas for any function-calling model
+rendr call add_title '{"text":"Hello"}'
+RENDR_URL=https://<tunnel>/t/<token> rendr call get_timeline   # a remote Rendr
+```
+
+### What the agent can do — 108 tools
 
 Every one has a handler, is advertised over MCP, and has been run against the
 running app. None is a stub.

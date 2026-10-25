@@ -17,8 +17,9 @@ import {
 	systemPreferences,
 	Tray,
 } from "electron";
+import { registerAgentChat, stopAgentChat } from "./agents";
 import { RECORDINGS_DIR } from "./appPaths";
-import { registerClaudeCli, stopClaudeCli } from "./claudeCli";
+import { registerConnect, stopConnect } from "./connect";
 import { showCursor } from "./cursorHider";
 import { registerExtensionIpcHandlers } from "./extensions/extensionIpc";
 import { getGpuSwitches } from "./gpuSwitches";
@@ -49,6 +50,7 @@ import {
 	setupAutoUpdates,
 	skipAvailableUpdateVersion,
 } from "./updater";
+import { registerVision } from "./vision";
 import {
 	closeRendrBarWindow,
 	createEditorWindow,
@@ -959,7 +961,8 @@ function createSourceSelectorWindowWrapper() {
 // explicitly with Cmd + Q.
 app.on("before-quit", () => {
 	void stopMcpServer();
-	stopClaudeCli();
+	stopAgentChat();
+	stopConnect();
 	killWindowsCaptureProcess();
 	showCursor();
 	cleanupNativeVideoExportSessions();
@@ -1171,9 +1174,14 @@ app.whenReady().then(async () => {
 		createEditorWindowWrapper();
 	}
 
-	// Claude Code answers in the agent panel, pointed back at our own MCP server.
-	registerClaudeCli(() => editorWindowRef ?? mainWindow);
+	// The agent panel answers with whichever agent the user brings — Claude Code,
+	// Codex, any ACP agent, or an API key — all pointed at Rendr's own tools.
+	registerAgentChat(() => editorWindowRef ?? mainWindow);
+	// Rendr as a connector: client setup, remote access, REST and OpenAPI.
+	registerConnect();
 	registerTranscribe();
+	// Person mattes and face tracks for camera footage, made on-device.
+	registerVision(() => editorWindowRef ?? mainWindow);
 
 	// Agent surface: local MCP server. Failure to bind never blocks the app.
 	void startMcpServer({

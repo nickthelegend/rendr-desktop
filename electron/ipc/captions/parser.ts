@@ -1,9 +1,5 @@
-import type {
-	CaptionCuePayload,
-	CaptionWordPayload,
-	WhisperJsonSegment,
-	WhisperJsonToken,
-} from "../types";
+import type { CaptionCuePayload, CaptionWordPayload, WhisperJsonSegment } from "../types";
+import { mergeWhisperTokens, readWhisperTokens } from "./whisperWords";
 
 function isFiniteNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value);
@@ -16,61 +12,24 @@ export function buildCaptionTextFromWords(words: CaptionWordPayload[]): string {
 		.trim();
 }
 
+/**
+ * One segment's words. The merging lives in whisperWords.ts, shared with the
+ * editor's transcription path; it used to be done here, and gave up on any
+ * token with a zero-length span — which whisper gives every punctuation mark
+ * and control token — so real `-ojf` output never yielded word timing.
+ */
 export function parseWhisperJsonWords(tokens: unknown): CaptionWordPayload[] {
-	if (!Array.isArray(tokens)) {
+	const parsed = readWhisperTokens(tokens);
+	if (!parsed) {
 		return [];
 	}
 
-	const words: CaptionWordPayload[] = [];
-	let nextLeadingSpace = false;
-
-	for (const token of tokens) {
-		if (!token || typeof token !== "object") {
-			continue;
-		}
-
-		const tokenData = token as WhisperJsonToken;
-		const tokenText = typeof tokenData.text === "string" ? tokenData.text : "";
-		if (!tokenText) {
-			continue;
-		}
-
-		const tokenStartMs = isFiniteNumber(tokenData.offsets?.from)
-			? Math.round(tokenData.offsets.from)
-			: null;
-		const tokenEndMs = isFiniteNumber(tokenData.offsets?.to)
-			? Math.round(tokenData.offsets.to)
-			: null;
-		const parts = tokenText.match(/\s+|[^\s]+/g) ?? [];
-
-		for (const part of parts) {
-			if (/^\s+$/.test(part)) {
-				nextLeadingSpace = words.length > 0;
-				continue;
-			}
-
-			if (tokenStartMs == null || tokenEndMs == null || tokenEndMs <= tokenStartMs) {
-				return [];
-			}
-
-			const previousWord = words.length > 0 ? words[words.length - 1] : null;
-			if (!previousWord || nextLeadingSpace) {
-				words.push({
-					text: part,
-					startMs: tokenStartMs,
-					endMs: tokenEndMs,
-					...(words.length > 0 && nextLeadingSpace ? { leadingSpace: true } : {}),
-				});
-			} else {
-				previousWord.text += part;
-				previousWord.endMs = Math.max(previousWord.endMs, tokenEndMs);
-			}
-
-			nextLeadingSpace = false;
-		}
-	}
-
-	return words.filter((word) => word.text.trim().length > 0);
+	return mergeWhisperTokens(parsed).map(({ leadingSpace, ...word }, index) => ({
+		...word,
+		startMs: Math.round(word.startMs),
+		endMs: Math.round(word.endMs),
+		...(index > 0 && leadingSpace ? { leadingSpace: true } : {}),
+	}));
 }
 
 export function parseWhisperJsonCues(content: string): CaptionCuePayload[] {

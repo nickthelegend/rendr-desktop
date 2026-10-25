@@ -127,6 +127,13 @@ export const DECLARED_TOOLS = [
 	"export_still_sequence",
 	// Driving a demo without a physical pointer
 	"import_telemetry",
+	// Creator tools (camera footage): see electron/mcp/creatorToolDefinitions.ts
+	"analyze_footage",
+	"remove_background",
+	"add_graphic",
+	"add_punch_ins",
+	"find_retakes",
+	"create_thumbnail",
 ] as const;
 
 /** Tools that mutate the timeline and are therefore refused while capture is running. */

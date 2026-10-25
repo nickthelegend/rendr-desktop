@@ -6,7 +6,7 @@
 // function of (preset, frame) rather than CSS keyframes is what makes that
 // possible: the exporter has no CSS engine, only a 2D context.
 
-import type { ClipModel, TextAnimation } from "./model";
+import type { ClipModel, TextAnimation, TextStyle } from "./model";
 
 /** How long an entrance runs, in frames at 30fps. Scaled by the real fps. */
 const ENTRANCE_FRAMES = 12;
@@ -52,6 +52,16 @@ function easeBack(t: number): number {
 	return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2;
 }
 
+/** A ball dropped onto the floor: three diminishing rebounds, then rest. */
+function easeBounce(t: number): number {
+	const n = 7.5625;
+	const d = 2.75;
+	if (t < 1 / d) return n * t * t;
+	if (t < 2 / d) return n * (t - 1.5 / d) ** 2 + 0.75;
+	if (t < 2.5 / d) return n * (t - 2.25 / d) ** 2 + 0.9375;
+	return n * (t - 2.625 / d) ** 2 + 0.984375;
+}
+
 function clamp01(value: number): number {
 	return Math.min(1, Math.max(0, value));
 }
@@ -85,6 +95,18 @@ export function resolveTextAnimation(clip: ClipModel, frame: number, fps: number
 		case "pop":
 			// Scale overshoots; opacity settles faster so it doesn't ghost.
 			return { ...NEUTRAL, opacity: clamp01(t * 2), scale: 0.7 + easeBack(t) * 0.3 };
+
+		case "bounce": {
+			// Drops in from above and settles. It runs half again as long as the
+			// other entrances, because the rebounds need room to read as rebounds
+			// rather than as a jitter.
+			const fall = clamp01(local / Math.round(entrance * 1.5));
+			return {
+				...NEUTRAL,
+				opacity: clamp01(fall * 4),
+				offsetY: -(1 - easeBounce(fall)) * 0.6,
+			};
+		}
 
 		case "typewriter": {
 			const text = clip.content ?? "";
@@ -143,6 +165,45 @@ export function wordColor(
 	}
 	// word_by_word
 	return { color: baseColor, opacity: word.revealed ? word.progress : 0 };
+}
+
+export interface WordPaint {
+	color: string;
+	opacity: number;
+	/** Scale about the word's own centre; above 1 while an active word pops. */
+	scale: number;
+	/** A box drawn behind the word, or null for none. */
+	background: string | null;
+}
+
+/**
+ * Everything one word is drawn with: its colour and opacity from `wordColor`,
+ * plus the active-word pop and highlight box.
+ *
+ * The pop eases in with the word's own arrival progress and overshoots a
+ * little before settling, which is what reads as a beat rather than a jump.
+ */
+export function wordPaint(
+	preset: TextAnimation,
+	word: WordState,
+	style: Partial<TextStyle> | undefined,
+): WordPaint {
+	const base = style?.color ?? "#FFFFFF";
+	const highlight = style?.highlightColor ?? "#F29933";
+	const paint = wordColor(preset, word, base, highlight);
+	let color = paint.color;
+	let opacity = paint.opacity;
+	if (preset === "karaoke") {
+		if (!word.active && word.revealed && style?.spokenColor) color = style.spokenColor;
+		if (!word.revealed) opacity = clamp01(style?.upcomingOpacity ?? 0.45);
+	}
+	const pop = style?.activeWordScale ?? 1;
+	return {
+		color,
+		opacity,
+		scale: word.active && pop !== 1 ? 1 + (pop - 1) * easeBack(word.progress) : 1,
+		background: word.active ? (style?.activeWordBackground ?? null) : null,
+	};
 }
 
 /** True when the preset draws word-by-word rather than as one block. */

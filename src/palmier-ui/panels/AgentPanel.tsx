@@ -6,12 +6,14 @@
 // server in the main process; nothing here fabricates a conversation.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SendIcon, SparkleIcon } from "../icons";
+import { PlugIcon, SendIcon, SlidersIcon, SparkleIcon } from "../icons";
 import { MCP_PORT } from "../mcpStatus";
+import { MiniMarkdown } from "../miniMarkdown";
 import { PanelHeader } from "../Panel";
 import type { EditorApi } from "../state";
 import { Status } from "../theme";
-import { useClaude } from "../useClaude";
+import { useAgent } from "../useAgent";
+import { ConnectSheet, type ConnectTab } from "./ConnectSheet";
 
 const STATUS_COLOR: Record<string, string> = {
 	ok: Status.success,
@@ -19,16 +21,33 @@ const STATUS_COLOR: Record<string, string> = {
 	pending: Status.warning,
 };
 
-const SUGGESTIONS = [
+const SCREEN_SUGGESTIONS = [
 	"Record my screen, then punch in wherever I click",
 	"Tighten the pacing and drop the filler words",
 	"Add a title card and warm the grade",
 ];
 
+/** What a creator with camera footage usually wants first. */
+const CREATOR_SUGGESTIONS = [
+	"Edit this talking head: cut pauses, retakes and ums, punch in on the cuts, caption it",
+	"Make a 45-second Short from the best part, with bold captions",
+	"Put me on a green background with a mind map of the topics behind me",
+	"Make me a YouTube thumbnail",
+];
+
 export function AgentPanel({ api }: { api: EditorApi }) {
 	const { state, toast } = api;
-	const { status, thinking, send: askClaude, cancel } = useClaude(api);
+	const agent = useAgent(api);
+	const { status, thinking, send: askAgent, cancel } = agent;
+	const agentName = status.label ?? "Agent";
+	// Footage that isn't one of Rendr's own screen recordings is, in practice,
+	// camera footage — and wants creator suggestions, not recording ones.
+	const hasCameraFootage = state.assets.some(
+		(asset) =>
+			asset.type === "video" && !asset.fromRecording && !asset.isMatte && !asset.isWebcam,
+	);
 	const [draft, setDraft] = useState("");
+	const [connectTab, setConnectTab] = useState<ConnectTab | null>(null);
 	const logRef = useRef<HTMLDivElement>(null);
 
 	/*
@@ -84,10 +103,10 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 				selectionChips.length > 0
 					? `[selected: ${selectionChips.map((chip) => `${chip.kind} ${chip.id}`).join(", ")}]\n`
 					: "";
-			askClaude(`${context}${trimmed}`);
+			askAgent(`${context}${trimmed}`);
 			setDraft("");
 		},
-		[askClaude, selectionChips],
+		[askAgent, selectionChips],
 	);
 
 	// Keep the newest message in view as the log grows. The log is the trigger,
@@ -102,10 +121,13 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 	return (
 		<>
 			<PanelHeader title="Agent">
-				<span
+				<button
+					type="button"
+					className="pmr-agent__who"
+					onClick={() => setConnectTab("agent")}
 					title={
 						status.available
-							? `Claude Code ${status.version ?? ""} — driving Rendr over MCP`
+							? `${agentName} ${status.version ?? ""} — driving Rendr. Click to change agent.`
 							: (status.reason ?? `Listening on 127.0.0.1:${MCP_PORT}`)
 					}
 					style={{
@@ -131,12 +153,38 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 					{thinking
 						? "thinking"
 						: status.available
-							? "Claude"
+							? agentName
 							: state.agentConnected
 								? "connected"
-								: "waiting"}
-				</span>
+								: "set up"}
+				</button>
+				<button
+					type="button"
+					className="pmr-btn pmr-btn--glyph"
+					title="Agent settings"
+					aria-label="Agent settings"
+					onClick={() => setConnectTab("agent")}
+				>
+					<SlidersIcon />
+				</button>
+				<button
+					type="button"
+					className="pmr-btn pmr-btn--glyph"
+					title="Rendr Connect — use Rendr from any agent"
+					aria-label="Rendr Connect"
+					onClick={() => setConnectTab("apps")}
+				>
+					<PlugIcon />
+				</button>
 			</PanelHeader>
+			{connectTab ? (
+				<ConnectSheet
+					initialTab={connectTab}
+					agent={agent}
+					toast={toast}
+					onClose={() => setConnectTab(null)}
+				/>
+			) : null}
 
 			<div className="pmr-agent">
 				{state.agentLog.length === 0 ? (
@@ -147,7 +195,7 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 						<span className="pmr-blank__title">Drive Rendr by asking</span>
 						<span className="pmr-blank__body">
 							{status.available
-								? "Claude Code answers here and edits the timeline through Rendr's own tools. Every call it makes shows up as a receipt."
+								? `${agentName} answers here and edits the timeline through Rendr's own tools. Every call it makes shows up as a receipt.`
 								: (status.reason ??
 									"Rendr exposes recording, zoom, and editing as MCP tools. Connect a client and every call shows up here as a receipt.")}
 						</span>
@@ -160,16 +208,18 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 								marginTop: 4,
 							}}
 						>
-							{SUGGESTIONS.map((suggestion) => (
-								<button
-									key={suggestion}
-									type="button"
-									className="pmr-suggestion"
-									onClick={() => send(suggestion)}
-								>
-									{suggestion}
-								</button>
-							))}
+							{(hasCameraFootage ? CREATOR_SUGGESTIONS : SCREEN_SUGGESTIONS).map(
+								(suggestion) => (
+									<button
+										key={suggestion}
+										type="button"
+										className="pmr-suggestion"
+										onClick={() => send(suggestion)}
+									>
+										{suggestion}
+									</button>
+								),
+							)}
 						</div>
 					</div>
 				) : (
@@ -199,7 +249,13 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 									<span className="pmr-msg__role">
 										{entry.kind === "user" ? "You" : "Rendr"}
 									</span>
-									<span className="pmr-msg__body">{entry.text}</span>
+									<span className="pmr-msg__body">
+										{entry.kind === "assistant" ? (
+											<MiniMarkdown text={entry.text} />
+										) : (
+											entry.text
+										)}
+									</span>
 								</div>
 							);
 						})}
@@ -213,7 +269,7 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 							<i />
 							<i />
 						</span>
-						Claude is working
+						{agentName} is working
 						<button type="button" className="pmr-thinking__stop" onClick={cancel}>
 							Stop
 						</button>
@@ -253,7 +309,7 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 						className="pmr-agent__field"
 						placeholder={
 							status.available
-								? "Ask Claude to record, cut, or zoom…"
+								? `Ask ${agentName} to record, cut, or zoom…`
 								: "Ask Rendr to record, cut, or zoom…"
 						}
 						value={draft}
@@ -269,15 +325,10 @@ export function AgentPanel({ api }: { api: EditorApi }) {
 						<button
 							type="button"
 							className="pmr-agent__endpoint"
-							title="Copy the MCP endpoint"
-							onClick={() => {
-								void navigator.clipboard
-									?.writeText(`http://127.0.0.1:${MCP_PORT}/mcp`)
-									.then(() => toast("MCP endpoint copied"))
-									.catch(() => toast("Couldn't copy to the clipboard", "error"));
-							}}
+							title="Connect other agents and apps to Rendr"
+							onClick={() => setConnectTab("apps")}
 						>
-							MCP · 127.0.0.1:{MCP_PORT}
+							Connect · MCP 127.0.0.1:{MCP_PORT}
 						</button>
 						<button
 							type="button"

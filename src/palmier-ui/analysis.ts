@@ -216,7 +216,13 @@ export function detectSilence(
 	sampleRate: number,
 	options: Partial<SilenceOptions> = {},
 ): Array<[number, number]> {
-	const config = { ...DEFAULT_SILENCE, ...options };
+	// Tool handlers pass every option, unset ones as undefined; spread as-is,
+	// those would erase the defaults and leave a NaN threshold that never trips.
+	const config = { ...DEFAULT_SILENCE };
+	for (const key of Object.keys(DEFAULT_SILENCE) as Array<keyof SilenceOptions>) {
+		const value = options[key];
+		if (typeof value === "number" && Number.isFinite(value)) config[key] = value;
+	}
 	const window = Math.max(1, Math.floor(sampleRate * 0.02));
 	const windows = Math.floor(samples.length / window);
 	if (windows < 2) return [];

@@ -45,6 +45,7 @@ export const TrackColor = {
 	audio: "rgb(46, 119, 101)",
 	image: "rgb(113, 84, 134)",
 	text: "rgb(113, 84, 134)",
+	graphic: "rgb(176, 141, 32)",
 	lottie: "rgb(160, 120, 34)",
 	sequence: "rgb(185, 178, 154)",
 	multicam: "rgb(255, 59, 48)",

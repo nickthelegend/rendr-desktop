@@ -192,6 +192,215 @@ export function groupWordsIntoCues(
 	return cues;
 }
 
+// ── Chunking ──────────────────────────────────────────────────────────
+
+/** A word on any clock (milliseconds or frames), and which span it came from. */
+interface SpannedWord {
+	text: string;
+	start: number;
+	end: number;
+	/** Index of the cue or clip the word belongs to. */
+	source: number;
+}
+
+interface Chunk {
+	words: SpannedWord[];
+	start: number;
+	end: number;
+	/** The span the first word came from, which the chunk inherits its look from. */
+	source: number;
+}
+
+const SENTENCE_END = /[.!?]["')\]]?$/;
+
+/**
+ * Cuts words into runs of at most `perChunk`, breaking early at a sentence end
+ * or a pause.
+ *
+ * Each run keeps the edges of the span it came from: the first run of a cue
+ * starts where the cue did and the last ends where it did, and runs inside a
+ * cue meet exactly at the next run's first word. Ending a run on its last
+ * word's own end instead would blank the screen for the few frames between
+ * words, and short-form captions at two words a card flicker visibly.
+ */
+function chunkWords(
+	words: readonly SpannedWord[],
+	spans: ReadonlyArray<{ start: number; end: number }>,
+	perChunk: number,
+	pause: number,
+): Chunk[] {
+	const runs: SpannedWord[][] = [];
+	let run: SpannedWord[] = [];
+	for (const word of words) {
+		const previous = run[run.length - 1];
+		if (previous && (run.length >= perChunk || word.start - previous.end >= pause)) {
+			runs.push(run);
+			run = [];
+		}
+		run.push(word);
+		if (SENTENCE_END.test(word.text)) {
+			runs.push(run);
+			run = [];
+		}
+	}
+	if (run.length > 0) runs.push(run);
+
+	return runs.map((entries, index) => {
+		const first = entries[0];
+		const last = entries[entries.length - 1];
+		const next = runs[index + 1]?.[0];
+		const prior = runs[index - 1]?.[runs[index - 1].length - 1];
+		const opensSpan = !prior || prior.source !== first.source;
+		const closesSpan = !next || next.source !== last.source;
+		return {
+			words: entries,
+			start: opensSpan ? Math.min(first.start, spans[first.source].start) : first.start,
+			end: closesSpan
+				? Math.max(last.end, spans[last.source].end)
+				: (next?.start ?? last.end),
+			source: first.source,
+		};
+	});
+}
+
+/**
+ * Splits a cue into cues of at most `perCaption` words.
+ *
+ * This is the short-form caption: one to three words a card, changing on the
+ * beat of the speech, rather than a subtitle line to be read. A cue without
+ * word timing has it inferred first, so an imported SRT chunks too.
+ */
+export function splitCue(cue: Cue, perCaption: number): Cue[] {
+	const words = inferWordTiming(cue);
+	if (perCaption <= 0 || words.length <= perCaption) return [cue];
+	const chunks = chunkWords(
+		words.map((word) => ({ text: word.text, start: word.startMs, end: word.endMs, source: 0 })),
+		[{ start: cue.startMs, end: cue.endMs }],
+		perCaption,
+		Number.POSITIVE_INFINITY,
+	);
+	if (chunks.length <= 1) return [cue];
+	return chunks.map((chunk, index) => ({
+		id: `${cue.id}-${index + 1}`,
+		startMs: chunk.start,
+		endMs: chunk.end,
+		text: chunk.words.map((word) => word.text).join(" "),
+		words: chunk.words.map((word) => ({
+			text: word.text,
+			startMs: word.start,
+			endMs: word.end,
+		})),
+	}));
+}
+
+/**
+ * Re-cuts an existing caption group to at most `perCaption` words a clip.
+ *
+ * Works from the clips' own word timing, so it needs no transcript and keeps
+ * every edit already made to the words. Each new clip takes its look and its
+ * track from the clip its first word came from. Words separated by a pause of
+ * more than `pauseSeconds` never share a clip, so re-cutting to a larger size
+ * cannot glue two sentences across a silence.
+ */
+export function rechunkCaptionGroup(
+	timeline: TimelineModel,
+	groupId: CaptionGroupId,
+	perCaption: number,
+	pauseSeconds = 0.7,
+): { timeline: TimelineModel; clipCount: number } {
+	const located = timeline.tracks
+		.flatMap((track) =>
+			track.clips
+				.filter(
+					(clip) =>
+						clip.captionGroupId === groupId && (clip.captionWords?.length ?? 0) > 0,
+				)
+				.map((clip) => ({ clip, trackId: track.id })),
+		)
+		.sort((a, b) => a.clip.startFrame - b.clip.startFrame);
+	if (located.length === 0 || perCaption <= 0) return { timeline, clipCount: 0 };
+
+	const words: SpannedWord[] = located.flatMap(({ clip }, source) =>
+		(clip.captionWords ?? []).map((word) => ({
+			text: word.text,
+			start: clip.startFrame + word.startFrame,
+			end: clip.startFrame + word.endFrame,
+			source,
+		})),
+	);
+	const chunks = chunkWords(
+		words,
+		located.map(({ clip }) => ({ start: clip.startFrame, end: clip.endFrame })),
+		perCaption,
+		pauseSeconds * timeline.fps,
+	);
+
+	const replaced = new Set(located.map(({ clip }) => clip.id));
+	const added = new Map<string, ClipModel[]>();
+	chunks.forEach((chunk, index) => {
+		const { clip: source, trackId } = located[chunk.source];
+		const startFrame = Math.round(chunk.start);
+		const endFrame = Math.max(startFrame + 1, Math.round(chunk.end));
+		const content = chunk.words.map((word) => word.text).join(" ");
+		// Keyframes are clip-relative and authored for the old span; carried
+		// onto a clip a third the length they would land in the wrong place.
+		const { keyframes: _dropped, ...look } = source;
+		const clip: ClipModel = {
+			...look,
+			id: `cap-${groupId}-f${startFrame}-${index + 1}`,
+			name: content.slice(0, 40),
+			startFrame,
+			endFrame,
+			content,
+			captionWords: chunk.words.map((word) => ({
+				text: word.text,
+				startFrame: Math.round(word.start) - startFrame,
+				endFrame: Math.round(word.end) - startFrame,
+			})),
+		};
+		added.set(trackId, [...(added.get(trackId) ?? []), clip]);
+	});
+
+	return {
+		timeline: {
+			...timeline,
+			tracks: timeline.tracks.map((track) => {
+				const fresh = added.get(track.id) ?? [];
+				if (fresh.length === 0 && !track.clips.some((clip) => replaced.has(clip.id)))
+					return track;
+				return {
+					...track,
+					clips: [...track.clips.filter((clip) => !replaced.has(clip.id)), ...fresh].sort(
+						(a, b) => a.startFrame - b.startFrame,
+					),
+				};
+			}),
+		},
+		clipCount: chunks.length,
+	};
+}
+
+// ── Placement ─────────────────────────────────────────────────────────
+
+/**
+ * Where captions sit by default, for a frame of this shape.
+ *
+ * Landscape keeps the broadcast position low in the frame. Vertical video is
+ * watched inside TikTok, Reels and Shorts, whose captions, handle and buttons
+ * cover roughly the bottom fifth and the right edge — a caption at the
+ * broadcast position lands under the like button. So vertical captions sit in
+ * the lower-middle, above that band, and narrower so they clear the buttons.
+ */
+export function captionPlacementFor(
+	width: number,
+	height: number,
+): { centerY: number; width: number } {
+	const aspect = width / Math.max(1, height);
+	if (aspect < 0.8) return { centerY: 0.7, width: 0.76 };
+	if (aspect < 1.25) return { centerY: 0.78, width: 0.82 };
+	return { centerY: 0.86, width: 0.86 };
+}
+
 const CAPTION_TRACK_NAME = "CC";
 
 /** Style captions default to: legible over footage without being asked. */
@@ -224,15 +433,20 @@ export function placeCaptions(
 		toFrame: (sourceMs: number) => number;
 		style?: Partial<typeof CAPTION_STYLE>;
 		centerY?: number;
+		/** At most this many words a caption, for the short-form look. */
+		wordsPerCaption?: number;
 	},
 ): CaptionPlacement {
 	if (cues.length === 0) return { timeline, groupId: options.groupId, clipCount: 0 };
 
 	const style = { ...CAPTION_STYLE, ...options.style };
-	const centerY = options.centerY ?? 0.86;
+	const safe = captionPlacementFor(timeline.width, timeline.height);
+	const centerY = options.centerY ?? safe.centerY;
+	const perCaption = Math.round(options.wordsPerCaption ?? 0);
+	const placed = perCaption > 0 ? cues.flatMap((cue) => splitCue(cue, perCaption)) : cues;
 
 	const clips: ClipModel[] = [];
-	for (const cue of cues) {
+	for (const cue of placed) {
 		const startFrame = Math.max(0, Math.round(options.toFrame(cue.startMs)));
 		const endFrame = Math.round(options.toFrame(cue.endMs));
 		if (endFrame <= startFrame) continue;
@@ -256,7 +470,7 @@ export function placeCaptions(
 				transform: {
 					centerX: 0.5,
 					centerY,
-					width: 0.86,
+					width: safe.width,
 					height: 0.2,
 					rotation: 0,
 					flipHorizontal: false,

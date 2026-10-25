@@ -1,8 +1,13 @@
-// Stdio→HTTP shim for Claude Desktop.
+// Stdio→HTTP shim for Claude Desktop, and for any agent that only speaks stdio MCP.
 // Adapted from Palmier Pro (GPL-3.0), mcpb/server/index.js. See NOTICE.md.
+//
+// RENDR_MCP_URL points it at another Rendr (a remote-access URL, say) and
+// RENDR_TOKEN is sent as a bearer token; both default to the local app.
 const http = require('node:http');
+const https = require('node:https');
 
-const URL_BASE = 'http://127.0.0.1:19790/mcp';
+const URL_BASE = process.env.RENDR_MCP_URL || 'http://127.0.0.1:19790/mcp';
+const TOKEN = process.env.RENDR_TOKEN || '';
 const RETRY_MS_MIN = 500;
 const RETRY_MS_MAX = 5000;
 const REQUEST_REPLAY_MS = 25000; // fail held requests before Claude Desktop's own 60s timeout
@@ -26,6 +31,7 @@ function headers(extra = {}) {
     ...extra,
   };
   if (sessionId) h['Mcp-Session-Id'] = sessionId;
+  if (TOKEN) h['Authorization'] = `Bearer ${TOKEN}`;
   return h;
 }
 
@@ -88,7 +94,8 @@ function openGetStream() {
     log('notification stream lost:', err.message);
     reconnect();
   };
-  request = http.get(URL_BASE, { headers: headers({ 'Accept': 'text/event-stream' }), timeout: 0 }, (res) => {
+  const client = URL_BASE.startsWith('https:') ? https : http;
+  request = client.get(URL_BASE, { headers: headers({ 'Accept': 'text/event-stream' }), timeout: 0 }, (res) => {
     if (res.statusCode !== 200) { res.resume(); return fail(new Error(`GET HTTP ${res.statusCode}`)); }
     let buf = '';
     res.setEncoding('utf8');

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { RecordingSessionData } from "./ipc/types";
 
 type NativeVideoExportWriteResult = { success: boolean; error?: string };
@@ -180,19 +180,80 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.send("rendr-agent:response", response);
 	},
 
-	// ── Claude CLI ──────────────────────────────────────────────────────
-	claudeStatus: () => ipcRenderer.invoke("rendr-claude:status"),
-	claudeSend: (prompt: string) => ipcRenderer.send("rendr-claude:send", prompt),
-	claudeCancel: () => ipcRenderer.send("rendr-claude:cancel"),
+	// ── Agent chat: whichever agent the user brings ──────────────────────
+	agentCatalog: () => ipcRenderer.invoke("rendr-agent-chat:catalog"),
+	agentStatus: () => ipcRenderer.invoke("rendr-agent-chat:status"),
+	agentGetSettings: () => ipcRenderer.invoke("rendr-agent-chat:get-settings"),
+	agentSetSettings: (patch: unknown) =>
+		ipcRenderer.invoke("rendr-agent-chat:set-settings", patch),
+	agentSetKey: (key: string) => ipcRenderer.invoke("rendr-agent-chat:set-key", key),
+	agentSend: (prompt: string) => ipcRenderer.send("rendr-agent-chat:send", prompt),
+	agentCancel: () => ipcRenderer.send("rendr-agent-chat:cancel"),
+	agentReset: () => ipcRenderer.send("rendr-agent-chat:reset"),
+	onAgentEvent: (callback: (event: unknown) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+		ipcRenderer.on("rendr-agent-chat:event", listener);
+		return () => ipcRenderer.removeListener("rendr-agent-chat:event", listener);
+	},
+
+	// ── Rendr Connect: Rendr as a connector for other agents ─────────────
+	connectState: () => ipcRenderer.invoke("rendr-connect:state"),
+	connectInstall: (clientId: string) => ipcRenderer.invoke("rendr-connect:install", clientId),
+	connectInstallCli: () => ipcRenderer.invoke("rendr-connect:install-cli"),
+	connectRemoteStart: (options: { mode: "cloudflared" | "manual"; origin?: string }) =>
+		ipcRenderer.invoke("rendr-connect:remote-start", options),
+	connectRemoteStop: () => ipcRenderer.invoke("rendr-connect:remote-stop"),
+	connectRotateToken: () => ipcRenderer.invoke("rendr-connect:rotate-token"),
+	onConnectChanged: (callback: (state: unknown) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+		ipcRenderer.on("rendr-connect:changed", listener);
+		return () => ipcRenderer.removeListener("rendr-connect:changed", listener);
+	},
+	analyzeFootage: async (
+		url: string,
+		request: { name: string; quality?: "fast" | "balanced" | "accurate"; sourcePath?: string },
+	) => {
+		// A file that's still on disk is read there by the main process — a 4K
+		// take can be gigabytes, and copying it through IPC would double that in
+		// memory. Only footage with no path (a recording, a download), or whose
+		// file has moved since, is sent as bytes.
+		const blob = await (await fetch(url)).blob();
+		if (request.sourcePath) {
+			const result = await ipcRenderer.invoke("rendr-vision:analyze", null, {
+				...request,
+				expectedSize: blob.size,
+			});
+			if (result?.code !== "source_moved") return result;
+		}
+		const bytes = await blob.arrayBuffer();
+		return ipcRenderer.invoke("rendr-vision:analyze", bytes, {
+			...request,
+			sourcePath: undefined,
+		});
+	},
+	/** Keeps something Rendr made (a thumbnail, a still) as a real file under ~/Pictures/Rendr. */
+	saveGenerated: (bytes: ArrayBuffer, name: string) =>
+		ipcRenderer.invoke("rendr-files:save-generated", bytes, name),
+	/** Where a dropped or picked file lives on disk, when it has a path at all. */
+	pathForFile: (file: File): string | null => {
+		try {
+			return webUtils.getPathForFile(file) || null;
+		} catch {
+			return null;
+		}
+	},
+	onFootageProgress: (callback: (event: { name: string; progress: number }) => void) => {
+		const listener = (
+			_event: Electron.IpcRendererEvent,
+			payload: { name: string; progress: number },
+		) => callback(payload);
+		ipcRenderer.on("rendr-vision:progress", listener);
+		return () => ipcRenderer.removeListener("rendr-vision:progress", listener);
+	},
 	transcribeAudio: async (url: string, name: string) => {
 		// The renderer owns the blob; the main process only ever sees bytes.
 		const bytes = await (await fetch(url)).arrayBuffer();
 		return ipcRenderer.invoke("rendr-transcribe:run", bytes, name);
-	},
-	onClaudeEvent: (callback: (event: unknown) => void) => {
-		const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
-		ipcRenderer.on("rendr-claude:event", listener);
-		return () => ipcRenderer.removeListener("rendr-claude:event", listener);
 	},
 
 	hudOverlaySetIgnoreMouse: (ignore: boolean) => {

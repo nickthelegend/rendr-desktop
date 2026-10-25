@@ -8,6 +8,7 @@
 import { useEffect, useRef } from "react";
 
 import { createAgentTools, type ToolResult } from "./agentTools";
+import { createCreatorTools } from "./creatorTools";
 import type { EditorApi } from "./state";
 
 interface AgentToolCall {
@@ -41,8 +42,13 @@ function summarize(name: string, result: ToolResult): string {
 export function useAgentBridge(api: EditorApi): void {
 	// The handlers close over the current editor, so they are rebuilt each
 	// render and read through a ref — the IPC listener registers once.
-	const toolsRef = useRef(createAgentTools(api));
-	toolsRef.current = createAgentTools(api);
+	// The creator tools (camera footage) live in their own module; one map serves both.
+	const build = (current: EditorApi) => ({
+		...createAgentTools(current),
+		...createCreatorTools(current),
+	});
+	const toolsRef = useRef(build(api));
+	toolsRef.current = build(api);
 	const apiRef = useRef(api);
 	apiRef.current = api;
 

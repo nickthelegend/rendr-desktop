@@ -1,6 +1,6 @@
 # What's left
 
-Rendr has **101 MCP tools**, every one with a handler, a registry entry, and a
+Rendr has **108 MCP tools**, every one with a handler, a registry entry, and a
 live run against the running app.
 
 Two rules produced all hundred, and are worth keeping:
@@ -33,6 +33,47 @@ Worth keeping as a record of what this discipline is for.
   program average in dBFS.
 - `solo` was already wired; the gap was that `get_timeline` never reported it.
   Adding a second write path broke the working one.
+
+## Creator editing: what the live runs on camera footage caught
+
+The creator tools were built by running the whole talking-head pipeline on a
+real take: captions from local Whisper, retakes, cuts, a 9:16 reframe,
+punch-ins, a thumbnail, and an exported MP4. Each of these got past the unit
+tests and was caught by looking at the output:
+
+- **Whisper rarely ends an abandoned attempt with a full stop.** "so today
+  we're going to, so today we're going to…" comes back as one sentence, so
+  retake detection has to treat commas and short pauses as places a speaker
+  can start over. It then has to tell that apart from rhetoric ("we want to
+  win, we want to grow").
+- **Zero-length words.** Local Whisper gives some tokens no duration, and
+  `remove_words` dropped them from the rebuilt captions. Cutting "I think"
+  silently took "punch" out of the subtitles.
+- **Per-project cursor telemetry.** A project with any screen recording drew
+  its mouse pointer over camera footage, and reframing panned camera footage
+  along it.
+- **A graphic took the backdrop with it.** A mind map placed behind a
+  green-screened speaker carried the green, so when the map ended the speaker
+  sat on black. The backdrop is now its own clip.
+- **A static crop can't hold a moving speaker.** A 9:16 crop shows a third of
+  the picture. Reframes now follow the face, with a dead zone.
+- **Reloads lost everything.** Blob URLs die with the window, so assets now
+  keep their path on disk, and reopened projects relink themselves.
+
+### Next for creators
+
+- **Background removal off macOS.** Vision is macOS-only. The cross-platform
+  route is transformers.js (already a dependency via kokoro-js) running MODNet
+  or RMBG in the main process, writing the same matte video. This needs a
+  one-time model download, which should be opt-in.
+- **Inspector controls for text style.** Outline, shadow and active-word pop
+  are agent-only for now.
+- **B-roll.** Search and place stock footage on keywords from the transcript.
+  This needs a provider API key (Pexels has a free tier).
+- **Chapters and descriptions.** YouTube chapter timestamps from caption
+  groups, mapped back through cuts.
+- **A limiter.** `normalize_audio` caps its gain rather than limiting peaks,
+  so peaky takes land short of −14 LUFS.
 
 ## Still needing new machinery
 

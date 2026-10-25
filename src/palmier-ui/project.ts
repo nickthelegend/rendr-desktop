@@ -38,6 +38,14 @@ export interface AssetManifestEntry {
 	/** The camera take recorded with this one, if any. */
 	webcamAssetId?: string;
 	isWebcam?: boolean;
+	/** The person matte made from this footage, and the matte itself. */
+	matteAssetId?: string;
+	isMatte?: boolean;
+	/** Small enough to keep inline; re-analysing a long take costs minutes. */
+	faceTrack?: AssetModel["faceTrack"];
+	personCoverage?: number;
+	/** Where the file was on disk, so a reopened project can relink itself. */
+	sourcePath?: string;
 }
 
 export interface ProjectFile {
@@ -87,6 +95,13 @@ export function toManifest(asset: AssetModel): AssetManifestEntry {
 		// composites no camera even after both files are relinked.
 		webcamAssetId: asset.webcamAssetId,
 		isWebcam: asset.isWebcam,
+		// Likewise the matte: without the pairing a reopened project loses its
+		// removed backgrounds even once the files are back.
+		matteAssetId: asset.matteAssetId,
+		isMatte: asset.isMatte,
+		faceTrack: asset.faceTrack,
+		personCoverage: asset.personCoverage,
+		sourcePath: asset.sourcePath,
 	};
 }
 
@@ -241,8 +256,15 @@ export function countOfflineAssets(assets: readonly AssetModel[]): number {
 export function relinkAssets(
 	offline: readonly AssetModel[],
 	incoming: readonly AssetModel[],
+	options: { pairExactly?: boolean } = {},
 ): { relinked: AssetModel[]; unmatched: AssetModel[] } {
-	const byName = new Map(incoming.map((asset) => [asset.name, asset]));
+	// A caller that knows which asset a file belongs to (auto-relink, by id)
+	// pairs them directly; otherwise files are matched by name, the
+	// drop-a-folder case.
+	const byName =
+		options.pairExactly && offline.length === 1 && incoming.length === 1
+			? new Map([[offline[0].name, incoming[0]]])
+			: new Map(incoming.map((asset) => [asset.name, asset]));
 	const relinked: AssetModel[] = [];
 	const used = new Set<string>();
 
@@ -250,8 +272,24 @@ export function relinkAssets(
 		const match = byName.get(asset.name);
 		if (match && !used.has(match.id)) {
 			used.add(match.id);
-			// Keep the project's id so existing clips stay attached.
-			relinked.push({ ...match, id: asset.id, offline: false });
+			// The project's record wins — its id keeps clips attached, and its
+			// pairings (camera take, person matte, face track, folder) are what
+			// the edit was built on. The fresh import only contributes the file
+			// itself and what was measured from it.
+			relinked.push({
+				...asset,
+				type: match.type,
+				durationSeconds: match.durationSeconds,
+				width: match.width,
+				height: match.height,
+				hasAudio: match.hasAudio,
+				url: match.url,
+				// The file's location is the one thing a relink should update; a
+				// relink from a file with no path forgets the old one, which no
+				// longer describes where this footage is.
+				sourcePath: match.sourcePath,
+				offline: false,
+			});
 		} else {
 			relinked.push(asset);
 		}
