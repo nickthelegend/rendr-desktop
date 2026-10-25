@@ -105,6 +105,17 @@ describe("detectSilence", () => {
 		expect(tight[0][1] - padded[0][1]).toBeCloseTo(0.2, 1);
 	});
 
+	it("keeps the defaults for options passed as undefined", () => {
+		// What a tool handler sends when the caller left every option out.
+		const spans = detectSilence(withGap(), RATE, {
+			thresholdDb: undefined,
+			minDurationSeconds: undefined,
+			paddingSeconds: undefined,
+		});
+		expect(spans).toEqual(detectSilence(withGap(), RATE));
+		expect(spans).toHaveLength(1);
+	});
+
 	it("ignores gaps shorter than the minimum", () => {
 		expect(detectSilence(withGap(), RATE, { minDurationSeconds: 5 })).toEqual([]);
 	});
